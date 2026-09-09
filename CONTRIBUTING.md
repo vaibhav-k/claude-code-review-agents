@@ -67,6 +67,8 @@ simultaneously is very hard to review for overlap — split it.
 - [ ] `DESIGN.md` Section A (architecture table) and Section C
       (routing matrix) updated to match, if the trigger conditions changed.
 - [ ] At least one new True Positive / False Positive Trap / Boundary Case
-      snippet added to Section E for any new pattern the agent now covers.
+      snippet added to Section E for any new pattern the agent now covers,
+      mirrored as a real fixture under `tests/fixtures/<agent-name>/` (see
+      `tests/fixtures/README.md`) with an entry in `tests/fixtures/manifest.json`.
 - [ ] `triage-router.md`'s routing rule table updated if you changed what
       should route to the affected agent.
