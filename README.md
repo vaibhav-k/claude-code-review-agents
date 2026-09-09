@@ -1,10 +1,14 @@
-# Automated Code Review Agents for Claude Code
+# claude-code-review-agents
 
-A production-grade, inference-efficient custom-agent system for automated
-software engineering review, built for Claude Code. It caps out at **8
-total agents** — one triage router plus seven razor-scoped defect-class
-specialists — and covers Python, Java, C#, C/C++, JavaScript, TypeScript,
-SQL, and Bash/Shell without a single language-specific agent.
+**Repository:** [github.com/vaibhav-k/claude-code-review-agents](https://github.com/vaibhav-k/claude-code-review-agents)
+
+A production-grade, inference-efficient Claude Code subagent system for
+automated diff review. It caps out at **8 total agents** — one triage
+router plus seven razor-scoped defect-class specialists (security, data
+integrity, concurrency/resources, reliability, performance, API/type
+contracts, testing/maintainability) — and covers Python, Java, C#, C/C++,
+JavaScript, TypeScript, SQL, and Bash/Shell without a single
+language-specific agent.
 
 The design goal: catch security, correctness, reliability, and
 maintainability defects that a diff actually introduces, say nothing when
@@ -37,6 +41,17 @@ for the full routing matrix, every agent's exact trigger conditions, and why
 the domains are grouped the way they are.
 
 ## Installation
+
+**Option A — start from this repo:**
+
+```
+git clone https://github.com/vaibhav-k/claude-code-review-agents.git
+```
+
+Open the cloned folder in Claude Code and it's ready to use immediately —
+skip to [Usage](#usage).
+
+**Option B — add these agents to an existing project:**
 
 1. Copy `CLAUDE.md` into the root of the repository you want reviewed (or
    merge its contents into an existing project `CLAUDE.md` — see the note
@@ -132,6 +147,14 @@ in [`DESIGN.md`](DESIGN.md), Section A.
 - This system reviews diffs; it does not replace human review for design
   intent, product correctness, or anything the evidence bar can't establish
   from the code itself.
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) before proposing a new agent or
+changing an existing one's scope — the 8-agent ceiling and zero-overlap
+rule are load-bearing, not stylistic preferences. Issues and pull requests
+are welcome at
+[github.com/vaibhav-k/claude-code-review-agents](https://github.com/vaibhav-k/claude-code-review-agents).
 
 ## License
 
