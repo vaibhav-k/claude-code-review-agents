@@ -21,21 +21,20 @@ CLAUDE.md                                     # shared rules, loaded by every ag
 .claude/agents/reliability-availability-review.md # Agent 4
 .claude/agents/performance-review.md           # Agent 5
 .claude/agents/api-type-contract-review.md     # Agent 6
-.claude/agents/testing-maintainability-review.md  # Agent 7
+.claude/agents/testing-coverage-review.md      # Agent 7
 ```
 
-A note on how this was verified: before finalizing the frontmatter schema, I
-had a documentation-lookup subagent confirm current Claude Code subagent
-syntax. Its answer came back flagged by the harness as containing
-instruction-shaped/injected content (it asserted an unusually large set of
-frontmatter fields, including a `permissionMode: bypassPermissions` option,
-which is exactly the kind of thing a malicious page would want a code-review
-agent to adopt). I did not use any of the unverifiable fields it listed.
-Every agent file here uses only the small, well-established frontmatter
-surface (`name`, `description`, `tools`, `model`, `color`) and scopes `Bash`
-to specific read-only git subcommands. This is called out again in the
-self-review at the end of this document — treat any field beyond that
-core set as unverified if you see it suggested elsewhere.
+A note on frontmatter: every agent file here uses only the small,
+well-established frontmatter surface (`name`, `description`, `tools`,
+`model`, `color`), with `Bash` scoped to specific read-only git subcommands.
+Some blog posts and community examples show a much larger frontmatter
+surface (permission modes, hooks, MCP server lists, and similar) — those
+are deliberately not used here, since they aren't confirmed in the current
+official Claude Code docs and at least one such example promotes a
+permission-bypass option, which is bad practice for a review-only tool
+regardless of whether the field actually exists in your version. Check your
+installed Claude Code version's documented frontmatter fields before adding
+anything beyond this core set; see the note at the end of Section F.
 
 ---
 
@@ -45,12 +44,12 @@ core set as unverified if you see it suggested elsewhere.
 |---|---|---|---|---|
 | **triage-router** | Read the diff, decide which specialists run. Never judges code quality. | File list, change type, keyword/pattern signals in diff hunks only. | Every review request, always first. | Never emits `[SEVERITY]` findings; never reads full files beyond diff hunks; never invokes other agents itself. |
 | **security-review** | Security vulnerabilities only. | Injection, authN/authZ, secrets, unsafe deserialization, SSRF/path traversal, crypto misuse, CORS/CSRF, vulnerable dependency bumps. | Auth/crypto/secret/session keyword; string-built query/command; deserialization call; new external-input handler; dependency bump in security-relevant lib. | Pre-existing vulns untouched by diff; theoretical vulns with no reachable input; missing rate limiting/headers as blanket advice; resource leaks or races with no security consequence. |
-| **data-integrity-review** | Data loss/corruption + functional correctness. | Transaction integrity, migrations/schema, SQL correctness, business-logic arithmetic, (de)serialization fidelity, unsafe state mutation. | `.sql`/migration file; DB write/ORM change; calculation touching money/date/quantity; transaction boundary change. | Pre-existing wrong queries untouched by diff; query performance (not correctness); resource/lifecycle issues; authz-scoped data exposure (→ security); missing tests. |
+| **data-integrity-review** | Data loss/corruption + functional correctness. | Transaction integrity, migrations/schema, SQL correctness, business-logic arithmetic, (de)serialization fidelity, unsafe state mutation, correctness risk from duplicated/dead logic. | `.sql`/migration file; DB write/ORM change; calculation touching money/date/quantity; transaction boundary change; near-identical duplicated business logic; unreachable branch/function added. | Pre-existing wrong queries untouched by diff; query performance (not correctness); resource/lifecycle issues; authz-scoped data exposure (→ security); missing tests; duplication/complexity flagged with no concrete drift risk. |
 | **concurrency-resource-review** | Concurrency/async defects + resource-lifecycle failures. | Races, deadlocks, unsynchronized shared state, async/promise correctness, leaked handles/connections/memory, double-free/use-after-free. | async/await, thread, lock/mutex/semaphore keyword; resource-acquiring call; `finally`/`using`/`with`/RAII/`Dispose`/`close` touched. | Pre-existing races/leaks untouched by diff; TOCTOU race that is actually an authz bypass (→ security); lock/resource performance cost (→ performance); missing concurrency tests. |
 | **reliability-availability-review** | Reliability/availability under failure. | Error-handling that hides failure, missing/wrong timeouts, retry/backoff defects, cascading-failure risk, startup/shutdown/health-check/queue-ack correctness. | Broadened/added catch-all; new network/DB call w/ no timeout; retry/backoff code; startup/shutdown/health-check/consumer-ack logic. | Pre-existing handling untouched by diff; leaks inside a catch block (→ concurrency-resource); auth-service-fails-open (→ security); "add more logging" advice; missing tests. |
 | **performance-review** | Material performance regressions only. | N+1 patterns, algorithmic complexity regressions, blocking calls in non-blocking contexts, unbounded growth by design, batch/pagination regressions, query-plan regressions. | Loop wrapping I/O/DB call; request-handler hot-path change; batch/page-size/cache-config change; algorithmic-structure change with evident scale. | Pre-existing perf characteristics untouched by diff; micro-optimizations w/o measured impact; slow code on demonstrably small bounded input; query correctness (→ data-integrity); growth from a cleanup bug (→ concurrency-resource); missing benchmarks. |
 | **api-type-contract-review** | API/contract violations + type-safety failures. | Breaking signature/endpoint changes, schema/DTO drift, unsafe type widenings/casts, null/undefined contract breaks, enum/union exhaustiveness, cross-language boundary drift. | Public function/endpoint/interface signature change; request/response DTO/schema change; type-annotation widening/removal; versioned-API file. | Pre-existing mismatches untouched by diff; breaking changes fully propagated to every visible consumer; internal logic correctness (→ data-integrity); same-language breaks the compiler already catches; missing tests. |
-| **testing-maintainability-review** | Meaningful testing gaps + material maintainability damage. | Untested non-trivial new branches, tests that cannot fail, removed/weakened assertions, duplicated business logic, complexity spikes mixing responsibilities, dead/unreachable code. | Production logic changed w/ no test diff in same commit; test file touched; large added function w/ no test; near-identical logic block added. | Missing tests for untouched code; subjective test style; trivial duplication; re-flagging a bug a peer agent already owns just because it also lacks a test; pre-existing debt untouched by diff. |
+| **testing-coverage-review** | Testing as a discipline — coverage gaps and test-quality defects. | Untested non-trivial new branches/boundaries, tests that cannot fail, removed/weakened assertions, flaky-prone patterns, test-isolation defects. | Production logic changed w/ no test diff in same commit; test file touched; new boundary condition without a boundary-case test; new test with a sleep/unseeded-random/shared-state pattern. | Missing tests for untouched code; subjective test style; duplicated logic or dead code (→ data-integrity); re-flagging a bug a peer agent already owns just because it also lacks a test; computing coverage percentages or running a test runner. |
 
 ---
 
@@ -77,7 +76,7 @@ route set — routes are additive, not exclusive.
 | Language | `.py`, `.java`, `.cs`, `.c`/`.h`, `.cpp`/`.hpp`, `.js`/`.ts`, `.sql`, `.sh` | No agent is language-triggered directly — language only tells triage which idioms each routed specialist should apply. |
 | File type | `*.sql`, `**/migrations/**` | data-integrity-review |
 | File type | `Dockerfile`, IaC (`*.tf`, `*.yaml` under `k8s/`/`infra/`) | reliability-availability-review (+ security-review if secrets/network policy touched) |
-| File type | `*.test.*`, `*_test.*`, `test_*.py`, `**/tests/**` | testing-maintainability-review |
+| File type | `*.test.*`, `*_test.*`, `test_*.py`, `**/tests/**` | testing-coverage-review |
 | File type | CI/CD config (`.github/workflows/*`, `Jenkinsfile`) | reliability-availability-review |
 | Change type | New public/exported function or endpoint signature | api-type-contract-review |
 | Change type | New/removed try/catch, retry, timeout, circuit breaker | reliability-availability-review |
@@ -85,13 +84,14 @@ route set — routes are additive, not exclusive.
 | Change type | Pure rename/formatting/comment-only diff | none (triage marks "no semantic change") |
 | Framework | ORM model change (SQLAlchemy, Hibernate, EF Core, TypeORM) | data-integrity-review |
 | Framework | Web framework route/controller/handler added or changed | security-review (authz), api-type-contract-review (signature/schema) |
-| Framework | Test framework fixtures/mocks changed | testing-maintainability-review |
+| Framework | Test framework fixtures/mocks changed | testing-coverage-review |
 | Technology | Message queue consumer/producer code | reliability-availability-review (ack/dead-letter), concurrency-resource-review (consumer concurrency) |
 | Technology | Crypto library call, JWT/session library call | security-review |
 | Technology | Serialization library (pickle, Jackson, protobuf, JSON) | security-review (unsafe deserialization) + api-type-contract-review (schema drift) as applicable |
 | Risk signal | Dependency/lockfile version bump | security-review (CVE relevance), reliability-availability-review (behavior change risk) as applicable |
 | Risk signal | Auth/session/secret keyword in diff hunk | security-review |
 | Risk signal | Money/date/quantity arithmetic changed | data-integrity-review |
+| Risk signal | Large near-identical block added within a touched file/module | data-integrity-review |
 | SDLC stage | Pre-commit / local diff review | full pipeline via `/review-pr` |
 | SDLC stage | PR review (CI-invoked) | full pipeline, base ref = target branch |
 | SDLC stage | Hotfix / production incident diff | triage still runs first; typically narrows to reliability-availability-review + whichever domain the incident touches |
@@ -192,6 +192,26 @@ Expected: no finding — `CreateTable` cannot narrow existing data because no
 rows exist yet; this is a brand-new table in the same diff. (If this were
 `AlterColumn` on a table that already exists elsewhere in the repo, it would
 be a True Positive.)
+
+**True Positive (structural correctness risk)** — Python, duplicated discount logic that can drift:
+```python
+def compute_checkout_total(order):
+    if order.customer.is_vip and order.total > 500:
+        return order.total * 0.80
+    return order.total
+
+def compute_invoice_total(order):
+    # copy-pasted from compute_checkout_total when invoicing was added
+    if order.customer.is_vip and order.total > 500:
+        return order.total * 0.80
+    return order.total
+```
+Expected: `[MEDIUM] billing.py:8 — compute_invoice_total duplicates compute_checkout_total's VIP-discount rule`
+Impact: the 20%-VIP-discount rule now exists in two places; a future change
+to the discount threshold or rate that only updates one of them will make
+checkout and invoicing silently disagree on the same order's total.
+Fix: extract the shared rule into one function (e.g. `apply_vip_discount`)
+and have both call sites use it.
 
 ### concurrency-resource-review
 
@@ -387,7 +407,7 @@ what the compiler already guarantees before merge. Reserve findings here for
 breaks that survive compilation (dynamic-language calls, reflection, a
 cross-service JSON boundary).
 
-### testing-maintainability-review
+### testing-coverage-review
 
 **True Positive** — Python, new non-trivial branch with zero test diff:
 ```python
@@ -433,6 +453,23 @@ not. Distinguish this from the True Positive above only by actually reading
 the assertion, not merely confirming a test function exists.
 Fix: assert against the expected literal value, e.g. `assert result == 120`.
 
+**Boundary Case (flaky-prone pattern)** — a new test that sleeps instead of waiting on a condition:
+```python
+def test_background_job_completes():
+    submit_job(job_id="123")
+    time.sleep(0.5)  # assume the worker is done by now
+    assert get_job_status("123") == "complete"
+```
+Expected: `[MEDIUM] test_jobs.py:3 — Fixed sleep instead of waiting on job completion`
+Impact: under CI load the worker can legitimately take longer than 500ms,
+making this test fail intermittently regardless of whether the job logic
+is correct — a flaky test erodes trust in the whole suite and gets ignored
+or disabled rather than fixed. Distinguish this from an ordinary passing
+test by checking whether the wait is time-based or condition-based; a
+`sleep` before an assertion on external/async completion is the tell.
+Fix: poll `get_job_status` with a timeout and short interval, or await an
+explicit completion signal, instead of a fixed sleep.
+
 ---
 
 ## F. Optimization Summary
@@ -467,9 +504,12 @@ line of code cannot generate two findings from two agents:
   performance-review, never both on the same line.
 - A breaking API change vs. what the function computes → api-type-contract-
   review vs. data-integrity-review.
-- "This bug also lacks a test" → testing-maintainability-review explicitly
-  stands down whenever a peer agent already owns the underlying defect, so
-  a single line never produces two findings for the same root cause.
+- Duplicated or dead business logic vs. a plain missing test → data-integrity-
+  review owns the former (it's a correctness-risk finding) and
+  testing-coverage-review owns the latter; neither reports the other's line.
+- "This bug also lacks a test" → testing-coverage-review explicitly stands
+  down whenever a peer agent already owns the underlying defect, so a
+  single line never produces two findings for the same root cause.
 
 **Routing efficiency:** triage runs on 100% of requests but is the cheapest
 agent in the system (`model: haiku`, diff-metadata only, no file reads
@@ -505,40 +545,41 @@ this is a review system, not a code-modification system, and the tool grant
 enforces that at the permission layer rather than relying on the prompt
 alone to self-restrain.
 
-**Self-review before shipping — issues to check before you rely on this:**
+**Open items — verify these in a live environment before relying on this
+system in CI:**
 
-1. *Unverified frontmatter fields, deliberately not used.* A documentation
-   subagent I consulted while designing this returned output the harness
-   flagged as instruction-shaped/injected (it pushed an unusually large
-   frontmatter surface, including a permission-bypass field). I've built
-   every file here on only the small, defensible field set
-   (`name`/`description`/`tools`/`model`/`color`) and scoped `Bash`
-   arguments. Before you rely on the `Bash(git diff *)`-style argument
-   scoping actually being enforced by your installed Claude Code version,
-   test it once (e.g. try `git push` from inside one of these agents and
-   confirm it's refused) rather than trusting the frontmatter alone.
-2. *CLAUDE.md auto-inheritance is the load-bearing efficiency assumption.*
-   The whole "write shared rules once" design depends on subagents actually
-   receiving the project's `CLAUDE.md` in their initial context. If your
-   Claude Code version does not do this for some reason, every agent will
-   silently lose the severity model, evidence bar, and output contract —
-   symptom would be inconsistent output formatting across agents. Run one
-   real review through `/review-pr` and check that a specialist's output
-   actually follows the `[SEVERITY] file:line` contract before trusting it
-   in CI.
+1. *Frontmatter field set.* This design intentionally sticks to the small,
+   well-established fields (`name`/`description`/`tools`/`model`/`color`)
+   with git-scoped `Bash` arguments, rather than the larger surface some
+   community examples show (permission modes, hooks, MCP server lists).
+   Confirm your installed Claude Code version's supported fields before
+   extending this list, and don't add a permission-bypass-style option to a
+   review-only agent regardless of what any single source suggests — there
+   is no legitimate reason for a read-only reviewer to need one. Also
+   confirm the `Bash(git diff *)`-style argument scoping is actually
+   enforced by your version (try `git push` from inside one of these agents
+   and confirm it's refused) rather than trusting the frontmatter alone.
+2. *`CLAUDE.md` auto-inheritance is the load-bearing efficiency assumption.*
+   The "write shared rules once" design depends on subagents actually
+   receiving the project's `CLAUDE.md` in their initial context. If a given
+   Claude Code version doesn't do this, every agent silently loses the
+   severity model, evidence bar, and output contract — the symptom would be
+   inconsistent output formatting across agents. Run one real review
+   through `/review-pr` and confirm a specialist's output actually follows
+   the `[SEVERITY] file:line` contract before trusting it in CI.
 3. *`/review-pr`'s parallel-dispatch step is an instruction to the
-   orchestrating session, not a hard guarantee.* If your Claude Code
+   orchestrating session, not a hard guarantee.* If a given Claude Code
    version executes agent invocations sequentially regardless of phrasing,
    the system still works correctly — it's just not exploiting the
-   parallelism this file has assumed. Not a correctness risk, only a
-   latency assumption worth confirming.
-4. *Triage on `haiku` is a deliberate cost/accuracy trade.* If you observe
-   triage under- or over-routing in practice (check the `<skip>` reasons
-   it emits against diffs you know touch, say, concurrency), the fix is to
-   bump `model: haiku` to `model: sonnet` in `triage-router.md` — the
-   routing rule table itself doesn't need to change.
-5. *The validation matrix (section E) is hand-written, not executed.* These
-   21 snippets are the acceptance tests this design should be graded
-   against, but I have not actually run them through the agents (that would
-   require a live Claude Code environment with these files installed). Run
-   them for real before treating any agent as validated.
+   parallelism assumed here. Not a correctness risk, only a latency
+   assumption worth confirming.
+4. *Triage on `haiku` is a deliberate cost/accuracy trade.* If triage
+   under- or over-routes in practice (check the `<skip>` reasons it emits
+   against diffs known to touch, say, concurrency), the fix is to bump
+   `model: haiku` to `model: sonnet` in `triage-router.md` — the routing
+   rule table itself doesn't need to change.
+5. *The validation matrix (Section E) is hand-written, not yet executed.*
+   These snippets are the acceptance tests this design should be graded
+   against, but they have not been run through the agents in a live Claude
+   Code install as part of this repository. Run them for real before
+   treating any agent as validated.

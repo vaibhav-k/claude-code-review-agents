@@ -95,12 +95,12 @@ normal, not a failure to narrow down.
 | Agent | Route in when |
 |---|---|
 | `security-review` | Any auth/crypto/secret/session keyword; any string-built query/command/shell invocation; any deserialization call; any newly added external input handling (HTTP handler, file upload, CLI arg parsing); any dependency bump in a security-relevant library. |
-| `data-integrity-review` | Any `.sql` file or migration; any DB write/ORM model change; any change to business-logic calculations, money/quantity/date handling, or serialization/parsing of persisted data; any change to transaction boundaries. |
+| `data-integrity-review` | Any `.sql` file or migration; any DB write/ORM model change; any change to business-logic calculations, money/quantity/date handling, or serialization/parsing of persisted data; any change to transaction boundaries; any newly added block that closely duplicates existing business logic elsewhere in a touched file/module; any branch/function added that looks unreachable given the diff's own control flow. |
 | `concurrency-resource-review` | Any async/await, thread, lock, mutex, semaphore, or promise-combinator keyword; any resource-acquiring call (file, socket, DB connection, process handle); any change touching `finally`/`using`/`with`/RAII/`Dispose`/`close`. |
 | `reliability-availability-review` | Any exception/error-handling block change (especially broadened or removed catches); any retry/backoff/timeout/circuit-breaker code; any startup, shutdown, health-check, or queue-consumer logic; any change to how failures propagate to callers or callers of external services. |
 | `performance-review` | Any loop or collection operation newly wrapping an I/O or DB call; any change to a request-handling hot path; any batch-size, pagination, or cache-configuration change; any algorithmic-structure change (nested loop added, index removed) in code with obvious scale. |
 | `api-type-contract-review` | Any change to a public/exported function, method, endpoint, or interface signature; any request/response DTO/schema change; any type-annotation change, removal, or widening (e.g. to `any`/`object`/`var` losing precision); any versioned-API file. |
-| `testing-maintainability-review` | Any change to a test file; any non-trivial production logic change (new branch, new function, changed condition) with no corresponding test diff in the same commit/PR; any change that materially increases a function's branching complexity or duplicates existing logic instead of reusing it. |
+| `testing-coverage-review` | Any change to a test file; any non-trivial production logic change (new branch, new function, changed condition) with no corresponding test diff in the same commit/PR. |
 
 If a diff is pure formatting/comments/renames with no semantic change to any
 file (verify via the diff hunks — no changed logic, only whitespace/import

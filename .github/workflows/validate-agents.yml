@@ -1,0 +1,52 @@
+name: Validate review agents
+
+# Starting point for regression-testing the agents in .claude/agents/
+# against the fixtures in tests/fixtures/. Requires ANTHROPIC_API_KEY (or
+# your org's equivalent) as a repository secret, and a Claude Code CLI
+# invocation appropriate to your installed version - adapt the run step
+# below rather than assuming it works unmodified.
+
+on:
+  pull_request:
+    paths:
+      - '.claude/agents/**'
+      - 'CLAUDE.md'
+      - 'tests/fixtures/**'
+  workflow_dispatch: {}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Claude Code CLI
+        run: |
+          # Install whatever version of the Claude Code CLI your org
+          # standardizes on. Left unpinned here deliberately - pin an
+          # exact version before relying on this in a real pipeline.
+          echo "TODO: install the Claude Code CLI"
+
+      - name: Run each fixture through its agent and diff against EXPECTED.md
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          set -euo pipefail
+          status=0
+          python3 - <<'PY'
+          import json, pathlib
+          manifest = json.loads(pathlib.Path("tests/fixtures/manifest.json").read_text())
+          for entry in manifest:
+              case_dir = pathlib.Path("tests/fixtures") / entry["agent"] / entry["case"]
+              print(f"-- {entry['agent']} / {entry['case']} ({entry['verdict']})")
+              print((case_dir / "EXPECTED.md").read_text())
+              # TODO: invoke `.claude/agents/{agent}.md` against the files in
+              # case_dir and compare its output to EXPECTED.md / the verdict
+              # above. This loop currently only prints what each case expects
+              # so the workflow runs cleanly out of the box; wire in a real
+              # invocation before trusting this as a merge gate.
+          PY
+
+      - name: Fail if any case didn't match its expected verdict
+        run: |
+          echo "TODO: turn the comparison above into a real pass/fail signal"

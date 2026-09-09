@@ -1,0 +1,1 @@
+Expected: no finding from this file alone - release is delegated to ReportSession.close(), a legitimate ownership pattern. Check callers (in the same diff) to confirm every construction is itself inside a try-with-resources/using/with; only an unclosed caller flips this to must_fire, attributed to that caller's line.

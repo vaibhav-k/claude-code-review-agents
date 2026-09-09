@@ -1,0 +1,117 @@
+[
+  {
+    "agent": "security-review",
+    "case": "true_positive",
+    "verdict": "must_fire"
+  },
+  {
+    "agent": "security-review",
+    "case": "false_positive_trap",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "security-review",
+    "case": "boundary_case",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "data-integrity-review",
+    "case": "true_positive",
+    "verdict": "must_fire"
+  },
+  {
+    "agent": "data-integrity-review",
+    "case": "false_positive_trap",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "data-integrity-review",
+    "case": "boundary_case",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "data-integrity-review",
+    "case": "true_positive_structural",
+    "verdict": "must_fire"
+  },
+  {
+    "agent": "concurrency-resource-review",
+    "case": "true_positive",
+    "verdict": "must_fire"
+  },
+  {
+    "agent": "concurrency-resource-review",
+    "case": "false_positive_trap",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "concurrency-resource-review",
+    "case": "boundary_case",
+    "verdict": "must_not_fire_standalone"
+  },
+  {
+    "agent": "reliability-availability-review",
+    "case": "true_positive",
+    "verdict": "must_fire"
+  },
+  {
+    "agent": "reliability-availability-review",
+    "case": "false_positive_trap",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "reliability-availability-review",
+    "case": "boundary_case",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "performance-review",
+    "case": "true_positive",
+    "verdict": "must_fire"
+  },
+  {
+    "agent": "performance-review",
+    "case": "false_positive_trap",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "performance-review",
+    "case": "boundary_case",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "api-type-contract-review",
+    "case": "true_positive",
+    "verdict": "must_fire"
+  },
+  {
+    "agent": "api-type-contract-review",
+    "case": "false_positive_trap",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "api-type-contract-review",
+    "case": "boundary_case",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "testing-coverage-review",
+    "case": "true_positive",
+    "verdict": "must_fire"
+  },
+  {
+    "agent": "testing-coverage-review",
+    "case": "false_positive_trap",
+    "verdict": "must_not_fire"
+  },
+  {
+    "agent": "testing-coverage-review",
+    "case": "boundary_case",
+    "verdict": "must_fire"
+  },
+  {
+    "agent": "testing-coverage-review",
+    "case": "boundary_case_flaky",
+    "verdict": "must_fire"
+  }
+]

@@ -64,7 +64,7 @@ domain).
 - Do not report generic "add more logging" or "add a metric" advice with no
   concrete failure scenario it prevents.
 - Do not report missing tests for failure-path behavior — flag the defect
-  itself; testing-maintainability-review owns coverage gaps.
+  itself; testing-coverage-review owns coverage gaps.
 
 ## Evidence requirements
 

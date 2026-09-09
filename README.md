@@ -29,7 +29,7 @@ triage-router  (haiku — reads diff metadata only, decides who else runs)
    ├─▶ reliability-availability-review    (routed only if triggered)
    ├─▶ performance-review                 (routed only if triggered)
    ├─▶ api-type-contract-review           (routed only if triggered)
-   └─▶ testing-maintainability-review     (routed only if triggered)
+   └─▶ testing-coverage-review           (routed only if triggered)
    │
    ▼
 merged findings, sorted by severity
@@ -95,12 +95,12 @@ if you want a single domain reviewed without running triage.
 |---|---|
 | `triage-router` | Reads the diff, decides which specialists run. Produces no findings. |
 | `security-review` | Injection, authN/authZ, secrets, unsafe deserialization, SSRF/path traversal, crypto misuse. |
-| `data-integrity-review` | Data loss/corruption and functional correctness — transactions, migrations, SQL correctness, business-logic arithmetic. |
+| `data-integrity-review` | Data loss/corruption and functional correctness — transactions, migrations, SQL correctness, business-logic arithmetic, and correctness risk from duplicated or dead logic. |
 | `concurrency-resource-review` | Races, deadlocks, unsynchronized shared state, leaked handles/connections/memory. |
 | `reliability-availability-review` | Error handling that hides failure, missing timeouts/retries, cascading-failure risk, startup/shutdown/health-check correctness. |
 | `performance-review` | N+1 queries, algorithmic complexity regressions, blocking calls in non-blocking contexts, unbounded growth. |
 | `api-type-contract-review` | Breaking signature/schema changes, unsafe type widenings, contract drift across language boundaries. |
-| `testing-maintainability-review` | Untested non-trivial new logic, tests that can't fail, material maintainability damage. |
+| `testing-coverage-review` | Untested non-trivial new logic, tests that can't fail, weakened assertions, flaky-prone or isolation-breaking test patterns. |
 
 Full razor-thin scope, triggers, and explicit exclusions for each agent are
 in [`DESIGN.md`](DESIGN.md), Section A.
@@ -120,6 +120,16 @@ in [`DESIGN.md`](DESIGN.md), Section A.
 - **Shared rules, once.** Severity model, evidence bar, output format, and
   risk ordering live in the project's `CLAUDE.md`, which Claude Code loads
   into every agent automatically — no agent file repeats them.
+
+## Development
+
+`tests/fixtures/` holds the validation matrix from `DESIGN.md` Section E as
+real source files, one folder per true-positive / false-positive-trap /
+boundary case, each with an `EXPECTED.md` describing the correct verdict —
+useful for sanity-checking a prompt change before opening a PR.
+`.github/workflows/validate-agents.yml` is a starting point for wiring
+these into CI; it's scaffolding, not a finished pipeline (see the TODOs in
+that file).
 
 ## Documentation
 

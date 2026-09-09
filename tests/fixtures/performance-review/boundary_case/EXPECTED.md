@@ -1,0 +1,1 @@
+Expected: no finding - this is a cache-fill pattern; the DB call happens once per distinct key for the process lifetime, not once per request. Would flip to must_fire if _cache were cleared/bypassed on every call in the diff.
