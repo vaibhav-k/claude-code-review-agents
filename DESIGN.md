@@ -24,6 +24,13 @@ CLAUDE.md                                     # shared rules, loaded by every ag
 .claude/agents/testing-coverage-review.md      # Agent 7
 ```
 
+This lists only the functional runtime — the 8 agent files, the shared
+rules, and the entry-point command. The repository also carries
+`README.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `LICENSE`, `.github/`
+(issue/PR templates and a CI workflow scaffold), and `tests/fixtures/`
+(the validation matrix in Section E as real files) — none of those affect
+what Claude Code loads at review time.
+
 A note on frontmatter: every agent file here uses only the small,
 well-established frontmatter surface (`name`, `description`, `tools`,
 `model`, `color`), with `Bash` scoped to specific read-only git subcommands.
