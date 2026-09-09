@@ -1,0 +1,17 @@
+# Repo-wide ruff config. `cli/` is a real installable Python package and
+# is linted normally (see cli/pyproject.toml for its own [tool.ruff], if
+# any) -- this file only exists to keep ruff from flagging the one place
+# in the repo where "undefined name" and similar checks don't apply.
+
+extend-exclude = [
+    # tests/fixtures/ holds the validation matrix from DESIGN.md Section E
+    # as real source files -- deliberately incomplete snippets (undefined
+    # `db`, `Order`, `logger`, etc. are stand-ins for a real app's
+    # objects) that exist to be read by a human or a review agent, not to
+    # be executed or pass static analysis. Some fixtures (e.g.
+    # testing-coverage-review/boundary_case's `result == result`) are
+    # intentionally demonstrating the exact defect the corresponding
+    # agent is supposed to catch -- linting them clean would defeat the
+    # point.
+    "tests/fixtures",
+]

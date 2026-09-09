@@ -27,9 +27,12 @@ CLAUDE.md                                     # shared rules, loaded by every ag
 This lists only the functional runtime — the 8 agent files, the shared
 rules, and the entry-point command. The repository also carries
 `README.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `LICENSE`, `.github/`
-(issue/PR templates and a CI workflow scaffold), and `tests/fixtures/`
-(the validation matrix in Section E as real files) — none of those affect
-what Claude Code loads at review time.
+(issue/PR templates and a CI workflow scaffold), `tests/fixtures/`
+(the validation matrix in Section E as real files), and `cli/` (a
+standalone, globally installable Python CLI that runs this same review
+logic against any git repository on disk, independent of Claude Code —
+see Section G) — none of those affect what Claude Code loads at review
+time inside this repository itself.
 
 A note on frontmatter: every agent file here uses only the small,
 well-established frontmatter surface (`name`, `description`, `tools`,
@@ -206,6 +209,7 @@ def compute_checkout_total(order):
     if order.customer.is_vip and order.total > 500:
         return order.total * 0.80
     return order.total
+
 
 def compute_invoice_total(order):
     # copy-pasted from compute_checkout_total when invoicing was added
@@ -438,9 +442,12 @@ def compute_discount(order):
         return order.total * 0.20
     return order.total * 0.05
 
+
 # test_discounts.py (same diff)
 def test_vip_discount_over_500():
     assert compute_discount(make_order(vip=True, total=600)) == 120
+
+
 def test_non_vip_discount():
     assert compute_discount(make_order(vip=False, total=600)) == 30
 ```
@@ -590,3 +597,254 @@ system in CI:**
    against, but they have not been run through the agents in a live Claude
    Code install as part of this repository. Run them for real before
    treating any agent as validated.
+
+---
+
+## G. Standalone CLI (`agent-review` / `agent-init`)
+
+Sections A–F describe the Claude-Code-native system: `.claude/agents/*.md`
+files that only run inside a Claude Code session, on whatever repository
+that session happens to be open in. `cli/` is a separate, second
+implementation of the same review philosophy — same severity model, same
+evidence bar, same 7 defect-class specialists, same output contract — built
+so it can run **against any git repository on disk, from any machine, with
+no Claude Code installation at all.**
+
+This is genuinely new software, not a refactor: Sections A–F never
+contained a line of executable code (agent files are prompts, not
+programs), so nothing existing was "restructured" — `cli/` is a from-scratch
+Python package that reuses the *content* of `CLAUDE.md` and the 7 specialist
+prompts (copied verbatim into `cli/src/agent_review/default_rules/`) as its
+default configuration, then reimplements everything else — routing,
+caching, orchestration, git plumbing — as real, tested control flow.
+
+### Why a direct API client instead of wrapping the Claude Code CLI
+
+The obvious alternative was to shell out to Claude Code's own CLI in
+headless mode and let it invoke the existing subagents. That was rejected
+for three concrete reasons: (1) this build environment has no way to
+install or invoke Claude Code itself to confirm its headless
+subagent-invocation behavior, so that path couldn't be tested at all, only
+assumed; (2) a direct dependency on the `anthropic` package is something
+every step of this package can be unit-tested against — including with a
+zero-network `Reviewer` fake — whereas shelling out to another CLI's
+undocumented headless behavior is not; (3) portability — `agent-review`
+now runs anywhere Python and Foundry credentials exist, not only on
+machines that also have Claude Code installed and configured. The
+trade-off is real and worth naming: this CLI's prompts are a *snapshot* of
+the `.claude/agents/` files at the time it was built, not a live read of
+them at every invocation (see "Config precedence" below for how a repo can
+still point the CLI at its own, current agent files).
+
+### Azure-only: Claude via Microsoft Foundry, not api.anthropic.com
+
+This project talks to Claude **exclusively** via Microsoft Foundry (Azure
+AI Foundry) — there is no direct-to-`api.anthropic.com` code path, by
+explicit choice, not merely as one option among several. Microsoft Foundry
+serves Claude through an Anthropic-compatible Messages API, and the
+official `anthropic` Python package ships a dedicated client class for it,
+`anthropic.AnthropicFoundry` (parallel to `AnthropicBedrock`/
+`AnthropicVertex` for the other clouds), added in `anthropic-python`
+0.74.0. `messages.create()`'s signature is unchanged from direct Anthropic
+use — same `system=`/`messages=` shape, same response object — so every
+prompt in this project (`CLAUDE.md` plus the 7 specialist agents) needed
+zero changes to migrate; only `agents_client.py`'s construction logic
+changed (client class, auth, resource name).
+
+`AnthropicFoundryReviewer` (`agents_client.py`) supports both of Foundry's
+auth modes, validated eagerly at construction for the same reason the
+original API-key check was eager (see "What TDD actually caught," below):
+a Foundry **resource name** (`ANTHROPIC_FOUNDRY_RESOURCE` / `--resource`)
+is required either way, then either an **API key**
+(`ANTHROPIC_FOUNDRY_API_KEY` / `--resource`'s sibling `api_key=`, the
+default) or **Entra ID** (Azure AD) via `azure-identity`'s
+`DefaultAzureCredential` (`ANTHROPIC_FOUNDRY_USE_ENTRA_ID=1` /
+`--use-entra-id`) — the latter an optional dependency
+(`pip install -e ".[azure-ad]"`), since API-key auth doesn't need it.
+`DEFAULT_MODEL` is `claude-sonnet-5`, matching what's actually GA in
+Foundry's model catalog (`claude-opus-5`, `claude-opus-4-8`,
+`claude-sonnet-5`, `claude-haiku-4-5` at time of writing) — Foundry's
+catalog and api.anthropic.com's aren't guaranteed to list identical model
+names, so this floor was verified against Foundry's own documentation
+rather than assumed to match the direct API.
+
+### File manifest (`cli/`)
+
+```
+cli/pyproject.toml                      # [project.scripts]: agent-review, agent-init
+cli/README.md                           # CLI-specific install/usage docs
+cli/src/agent_review/cli.py             # argparse wiring: review/commit/heal subcommands + agent-init
+cli/src/agent_review/orchestrator.py    # diff -> route -> (cache hit | model call) -> parse -> aggregate
+cli/src/agent_review/routing.py         # zero-cost deterministic port of triage-router.md's rule table
+cli/src/agent_review/cache.py           # .agent-cache/manifest.json — blob-hash + agent-set keyed
+cli/src/agent_review/git_utils.py       # git plumbing against an arbitrary target repo path
+cli/src/agent_review/discovery.py       # language + test-runner auto-discovery
+cli/src/agent_review/prompts.py         # .agent-rules/ -> .claude/ -> bundled default_rules/ lookup
+cli/src/agent_review/findings.py        # output-contract parser/sorter (shared with the orchestrator)
+cli/src/agent_review/agents_client.py   # Reviewer protocol + real AnthropicFoundryReviewer (Azure only)
+cli/src/agent_review/commit.py          # staged-diff commit message generator (no co-author trailer)
+cli/src/agent_review/healing.py         # guarded self-healing: propose a patch, apply only if --apply
+cli/src/agent_review/init.py            # agent-init: scaffolds .agent-rules/, .agent-cache/, DESIGN.md
+cli/src/agent_review/default_rules/     # bundled snapshot of CLAUDE.md + the 7 specialist prompts
+cli/tests/                              # 80 pytest tests, including full CLI-entry-point integration tests
+```
+
+### Local caching (requirement 1: cache isolation + incremental analysis)
+
+`.agent-cache/manifest.json` lives *inside the target repository*, not
+globally and not only in process memory. Each entry is keyed by the file's
+git blob hash (`git hash-object`) plus the exact sorted set of specialist
+agents routed to it; a cache hit requires both to match exactly, so
+widening the routed agent set (e.g. after editing a specialist's prompt)
+correctly invalidates the cache even though the file's content didn't
+change. `run_review()` only ever calls the model for a cache miss — a
+second run with zero relevant changes costs zero API calls, verified
+end-to-end in `cli/tests/test_cli_integration.py` through the real
+`agent-review` entry point, not just the lower-level orchestrator function.
+The cache directory itself is excluded from being treated as reviewable
+content unconditionally (`orchestrator.py`'s `_ALWAYS_IGNORED_PREFIXES`),
+independent of whether the target repo's `.gitignore` has been set up yet —
+this was a real bug caught during development (see "What TDD actually
+caught," below), not a design that was correct on the first attempt.
+
+### Global CLI & multi-repo entry point (requirement 2)
+
+`agent-review --path /path/to/repo` (any subcommand — `review` is implied
+when none is given) resolves that path, confirms it's a git repository,
+and does everything relative to it. `prompts.py`'s config lookup checks,
+in order, `<target_repo>/.agent-rules/`, then `<target_repo>/.claude/`
+(so a repo that already uses the Claude-Code-native agents — including
+this one — works with the CLI unmodified), then falls back to the
+snapshot bundled with the package. `DESIGN.md`/spec files are read from
+the target repo's own root, never from wherever the CLI happens to be
+installed.
+
+### Portable git hooks & auto-discovery (requirement 3)
+
+Every git operation in `git_utils.py` takes the target repo's path as an
+explicit argument (`git -C <repo> ...`) rather than assuming the current
+working directory — including a fix, found via testing, for brand-new
+files that were never `git add`ed (`changed_files()` originally missed
+them entirely; a review tool that can't see a file someone just wrote is a
+real functional gap, not an edge case). `discovery.py` detects language mix
+and test runner via marker files (`pyproject.toml`/`pytest.ini` → pytest,
+`package.json` → npm test, `pom.xml` → Maven, `build.gradle[.kts]` →
+Gradle, `Cargo.toml` → cargo, `CMakeLists.txt` → ctest, `*.csproj`/`*.sln`
+→ dotnet). `commit.py` generates a semantic commit message for the target
+repo's staged diff and — per the user's own specification — never adds a
+co-author or attribution trailer; this is unrelated to and does not
+override the attribution policy Claude follows for its own commits to
+*this* repository, since here the CLI is producing a message on behalf of
+the user, about the user's own change, for the user's own commit.
+
+"Self-healing loops" are deliberately **not** autonomous. `healing.py` runs
+the detected test command and, on failure, asks the model for a root-cause
+explanation and a unified diff — but `apply_patch()` is never called
+implicitly; the CLI's `agent-review heal` subcommand only writes the patch
+to disk (via `git apply`, after a `git apply --check` dry run) when the
+user passes `--apply` explicitly, and always re-runs the tests afterward
+to report whether the patch actually fixed the failure. A silent
+autonomous edit-and-commit loop was considered and rejected: it is exactly
+the kind of unbounded blast radius this entire project's evidence-based,
+diff-scoped philosophy exists to avoid.
+
+### Initialization command (requirement 4)
+
+`agent-init --path /path/to/repo` is idempotent — safe to re-run, never
+overwrites a file that's already there (verified by
+`cli/tests/test_init.py`, including against a repo that customized a
+scaffolded file). It creates `<repo>/.agent-rules/` (a copy of
+`CLAUDE.md` and the 7 specialist prompts, editable per-repo without
+touching the installed package), ensures `.agent-cache/` is listed in the
+target repo's `.gitignore`, and writes a starter `DESIGN.md` (architecture
+overview / key invariants / known tradeoffs) if the repo doesn't already
+have one.
+
+### What TDD actually caught
+
+Every module above was written test-first and run for real
+(`python -m pytest cli/tests/ -q`, 87 tests passing), and several genuine
+bugs were found and fixed this way rather than assumed away:
+
+- `routing.py`'s original keyword list had **no pattern for the single
+  most iconic SQL-injection shape** — an f-string or concatenation
+  building a query around unescaped input — until a validation-style test
+  case for exactly that surfaced the gap.
+- `git_utils.changed_files()` silently skipped untracked (brand-new,
+  never-`git add`ed) files entirely, which would have made the CLI blind
+  to new files in the exact moment they matter most (right before a
+  commit).
+- Fixing that immediately surfaced a second bug: the cache's own
+  `.agent-cache/manifest.json`, once written, showed up as an "untracked
+  file" on the next run and got treated as reviewable content — breaking
+  the "second run with no changes costs zero API calls" guarantee this
+  whole caching design exists to provide.
+- `healing.py`'s end-to-end apply-then-rerun test failed intermittently
+  for a subtle reason: CPython's `.pyc` bytecode cache is invalidated by
+  `(mtime, size)`, and a one-character fix can leave both identical
+  versus the failing run moments earlier, causing a rerun to silently
+  execute stale bytecode and report the original failure again even
+  though the patch applied correctly. Fixed by running the test command
+  with `PYTHONDONTWRITEBYTECODE=1`.
+- The very first draft of the reviewer client (`AnthropicReviewer`, calling
+  api.anthropic.com directly, before the later migration to Foundry) only
+  validated the API key lazily, inside the anthropic SDK, at request time
+  — which, dispatched from inside the orchestrator's thread pool, surfaced
+  as a raw Python traceback from a worker thread instead of a clean error.
+  Fixed by validating eagerly at construction; that same eager-validation
+  discipline carried over to `AnthropicFoundryReviewer`'s resource/API-key/
+  Entra-ID checks when the client was migrated to Foundry.
+- A self-review performed right after the Foundry migration (before
+  shipping it) caught a real boolean-parsing bug in that same construction
+  path: `use_entra_id = bool(os.environ.get("ANTHROPIC_FOUNDRY_USE_ENTRA_ID"))`
+  treats *any* non-empty string as `True`, so someone explicitly setting
+  `ANTHROPIC_FOUNDRY_USE_ENTRA_ID=0` to turn Entra ID **off** would instead
+  have it silently turned **on** — bypassing their configured API key
+  entirely and switching to `DefaultAzureCredential`, likely failing (or
+  worse, succeeding against the wrong identity) far from the actual
+  misconfiguration. Reproduced directly, then fixed with a small
+  `_env_flag()` helper that treats `""`, `"0"`, `"false"`, `"no"`, and
+  `"off"` (case-insensitive) as false and everything else as true;
+  covered by a parametrized regression test
+  (`test_use_entra_id_env_var_falsy_string_does_not_enable_entra_id`) plus
+  a companion truthy-value test so the fix doesn't overcorrect.
+- The same self-review flagged the `anthropic>=0.74.0` floor as
+  *plausible but unverified* — it's confirmed to be the release that added
+  `AnthropicFoundry`, but the constructor's exact keyword surface
+  (`resource=`, `api_key=`, `azure_ad_token_provider=`) had only been
+  exercised against the newer 1.4.0 installed in this sandbox. Installed
+  0.74.0 itself in an isolated venv and inspected the constructor
+  signature directly — it matches exactly, so the pin is now a verified
+  floor, not an assumption carried over from "first version with the
+  class."
+
+### Honest limitations of this CLI, as delivered
+
+- **Confirmed working end-to-end against a real Microsoft Foundry
+  resource** (2026-09-09, `claude-haiku-4-5`, run by the CLI's own user
+  against a real repo) — no longer a theoretical gap. The build/test
+  environment itself still has no Foundry resource or credential
+  configured, so every automated test still exercises orchestration logic
+  (routing, caching, git diffing, patch application) against a
+  hand-written `FakeReviewer`/`ScriptedReviewer` rather than the network;
+  `cli/tests/test_agents_client.py` still only covers
+  `AnthropicFoundryReviewer`'s constructor-time validation and its error
+  handling, not a real `messages.create()` call. But the real client has
+  now been exercised for real, by an actual user, against an actual
+  resource, and returned a real (clean) review -- getting there also
+  surfaced and fixed several real config/UX gaps along the way: a
+  `.env`-loading bug, unstripped whitespace in the resource/key, an
+  opaque connection error when `ANTHROPIC_FOUNDRY_RESOURCE` held a model
+  deployment name instead of the resource name, and the
+  deployment-vs-deploymentless model distinction (some models require an
+  actual named deployment in the target resource; calling a bare model ID
+  that isn't deployed there fails with `DeploymentError`). See
+  CHANGELOG.md's 0.4.4-0.4.8 entries for the specifics.
+- **Nothing has been installed or run on the user's actual machine from
+  this session** — this build and its test suite ran entirely inside this
+  sandbox. `pip install -e cli/` needs to be run for real, on the target
+  machine, before `agent-review`/`agent-init` exist as commands there.
+- **Test-runner auto-discovery is a file-presence heuristic**
+  (`discovery.py`), not a guarantee the detected command is installed or
+  correctly configured for a given repo; `agent-review heal` reports a
+  missing/failing runner clearly rather than guessing further.

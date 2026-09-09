@@ -1,0 +1,24 @@
+# Runtime dependencies for the agent-review / agent-init CLI.
+# Mirrors [project.dependencies] in pyproject.toml -- keep the two in sync.
+#
+# Install with:
+#   pip install -r requirements.txt
+# (or just `pip install -e .`, which reads pyproject.toml directly and
+# also registers the agent-review/agent-init console scripts -- this file
+# exists for tooling that expects a requirements.txt, e.g. some CI
+# systems, Docker base images, or dependency-scanning tools.)
+#
+# This project talks to Claude exclusively via Microsoft Foundry (Azure AI
+# Foundry) -- there is no direct-to-api.anthropic.com code path. 0.74.0 is
+# the first anthropic-python release with the AnthropicFoundry client class.
+
+anthropic>=0.74.0
+
+# Loads .env files (see .env.example) so ANTHROPIC_FOUNDRY_RESOURCE/etc.
+# don't have to be exported by hand every session -- never overrides a
+# variable already set in the real environment.
+python-dotenv==1.2.3
+
+# Uncomment if authenticating to Microsoft Foundry via Entra ID (Azure AD)
+# rather than an API key (ANTHROPIC_FOUNDRY_USE_ENTRA_ID=1 / --use-entra-id):
+# azure-identity>=1.15.0

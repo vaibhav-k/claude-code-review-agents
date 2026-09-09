@@ -13,3 +13,19 @@ CLAUDE.local.md
 # Misc scratch
 *.log
 *.tmp
+
+# cli/ (Python package) build/test artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# agent-review's own cache, in case it's ever run against this repo itself
+.agent-cache/
+
+# Local secrets -- never commit a filled-in .env; cli/.env.example is the
+# tracked template (documents ANTHROPIC_FOUNDRY_RESOURCE/API_KEY/etc.)
+.env
+.env.*
+!.env.example

@@ -1,0 +1,11 @@
+// Lets Pylance/Pyright resolve `agent_review` in cli/tests/*.py without
+// depending on whether `pip install -e cli[dev]` has been run in the
+// active interpreter. Every test file does
+// `sys.path.insert(0, .../cli/src)` before importing, which works at
+// runtime (pytest executes it before the import) but static analyzers
+// don't execute code, so they can't see it -- extraPaths tells Pyright
+// the same thing statically.
+{
+  "extraPaths": ["cli/src"],
+  "exclude": ["tests/fixtures"]
+}

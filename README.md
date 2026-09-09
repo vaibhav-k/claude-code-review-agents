@@ -121,6 +121,41 @@ in [`DESIGN.md`](DESIGN.md), Section A.
   risk ordering live in the project's `CLAUDE.md`, which Claude Code loads
   into every agent automatically — no agent file repeats them.
 
+## Run it against any repo from the command line
+
+The agents above only run inside a Claude Code session. `cli/` is a
+separate, standalone Python package — `agent-review` and `agent-init` —
+that runs the same review philosophy (same severity model, same evidence
+bar, same 7 specialists) against **any** git repository, with no Claude
+Code installation required:
+
+```
+cd cli
+pip install -e .
+export ANTHROPIC_FOUNDRY_RESOURCE=your-foundry-resource-name
+export ANTHROPIC_FOUNDRY_API_KEY=...      # or ANTHROPIC_FOUNDRY_USE_ENTRA_ID=1
+
+agent-init --path /path/to/some/repo      # one-time scaffolding
+agent-review --path /path/to/some/repo    # review the current diff
+```
+
+(On Windows PowerShell, `export FOO=bar` above is bash syntax and won't
+run as-is — use `$env:FOO = "bar"` instead; see
+[`cli/README.md`](cli/README.md#install) for the PowerShell-specific
+commands.)
+
+It talks to Claude exclusively via Microsoft Foundry (Azure AI Foundry) —
+there's no direct-to-Anthropic-API path, by design.
+
+It also generates commit messages for your staged diff (no co-author
+trailer added — that's your commit) and can run a repo's detected test
+suite, proposing a fix on failure that's only ever written to disk if you
+pass `--apply`. See [`cli/README.md`](cli/README.md) for full usage, and
+`DESIGN.md` Section G for the architecture — including "Honest
+limitations," which now also covers what a real end-to-end run against a
+live Foundry resource surfaced (and how it was fixed) beyond what the
+automated test suite alone could catch.
+
 ## Development
 
 `tests/fixtures/` holds the validation matrix from `DESIGN.md` Section E as
@@ -142,6 +177,8 @@ that file).
   existing agent or add a new one without breaking the 8-agent ceiling or
   introducing scope overlap.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history.
+- [`cli/README.md`](cli/README.md) — install/usage for the standalone
+  `agent-review`/`agent-init` command-line tool.
 
 ## Known limitations
 
@@ -157,6 +194,13 @@ that file).
 - This system reviews diffs; it does not replace human review for design
   intent, product correctness, or anything the evidence bar can't establish
   from the code itself.
+- `cli/`'s build/test environment still has no Foundry resource or
+  credentials configured, so its automated suite tests orchestration
+  logic (routing, caching, git diffing) against a fake, in-memory model
+  client, not a live one. It has, however, since been run for real by an
+  actual user against a real Microsoft Foundry resource and a real repo
+  and produced a correct (clean) review -- see `DESIGN.md` Section G's
+  "Honest limitations" for what that first live run surfaced (and fixed).
 
 ## Contributing
 

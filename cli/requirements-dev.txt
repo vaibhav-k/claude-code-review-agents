@@ -1,0 +1,18 @@
+# Development dependencies: everything in requirements.txt, plus what's
+# needed to run the test suite and lint the codebase.
+# Mirrors [project.optional-dependencies].dev in pyproject.toml -- keep
+# the two in sync.
+#
+# Install with:
+#   pip install -r requirements-dev.txt
+# (or `pip install -e ".[dev]"`, which reads pyproject.toml directly).
+
+-r requirements.txt
+
+pytest>=7.0
+ruff>=0.15.0
+mypy>=1.10
+# Entra ID auth path is exercised by the test suite's construction-time
+# validation tests, so it's an unconditional dev dependency (unlike in
+# requirements.txt, where it's optional for a plain API-key setup).
+azure-identity>=1.15.0

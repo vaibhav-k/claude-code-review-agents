@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-review"
+version = "0.7.0"
+description = "Evidence-based automated code review, staged-diff commit messages, and guarded self-healing for any git repository. Talks to Claude exclusively via Microsoft Foundry (Azure AI Foundry)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Vaibhav Kulshrestha" }]
+dependencies = [
+    # 0.74.0 is the first release with the AnthropicFoundry client class
+    # (Microsoft Foundry / Azure AI Foundry support) this project depends
+    # on exclusively -- there is no direct-to-api.anthropic.com code path.
+    "anthropic>=0.74.0",
+    # Loads .env files (see .env.example) so ANTHROPIC_FOUNDRY_RESOURCE/etc.
+    # don't have to be exported by hand every session -- never overrides a
+    # variable already set in the real environment.
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+# Only needed for Entra ID (Azure AD) auth -- ANTHROPIC_FOUNDRY_USE_ENTRA_ID=1
+# or --use-entra-id. API-key auth (the default) doesn't need this.
+azure-ad = [
+    "azure-identity>=1.15.0",
+]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.15.0",
+    "mypy>=1.10",
+    "azure-identity>=1.15.0",
+]
+
+[project.scripts]
+agent-review = "agent_review.cli:main"
+agent-init = "agent_review.cli:main_init"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+agent_review = ["default_rules/*.md", "default_rules/agents/*.md"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+# Pinned here (rather than left to whatever's in each contributor's global
+# ruff config) so `ruff check .` behaves the same for everyone: pyflakes +
+# pycodestyle + bugbear + comprehension/simplify checks + pyupgrade +
+# ruff-specific rules + a curated slice of pylint (full "PL" is noisy for
+# a project this size -- e.g. PLR0913/PLR2004 flag things this codebase
+# does on purpose, like a 5-argument orchestrator function).
+select = ["E", "F", "W", "B", "C4", "SIM", "UP", "RUF", "PLE", "PLW", "PLC"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files legitimately import fixtures/helpers with wildcard-adjacent
+# patterns and construct objects whose attributes ruff can't always trace;
+# nothing found here so far has needed a blanket ignore, but this is the
+# place to add one if a real false positive shows up in tests/ specifically.
+"tests/*" = []
