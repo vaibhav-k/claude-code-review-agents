@@ -1,0 +1,15 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/settings.json
+.idea/
+
+# Local Claude Code state (project-local overrides, not the shared agent system)
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Misc scratch
+*.log
+*.tmp
