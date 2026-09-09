@@ -69,7 +69,7 @@ state, are both "who owns this and when does it end" bugs.
   (that's performance-review's domain) unless the pattern also causes a
   correctness/lifecycle failure.
 - Do not report missing tests for concurrent behavior — flag the defect
-  itself; testing-maintainability-review owns coverage gaps.
+  itself; testing-coverage-review owns coverage gaps.
 
 ## Evidence requirements
 

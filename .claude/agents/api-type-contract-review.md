@@ -68,7 +68,7 @@ consumers assume it means."
   (that's data-integrity-review's domain) — you own whether its INTERFACE
   is honored, not whether its internal logic is right.
 - Do not report missing tests for the contract — that's
-  testing-maintainability-review's domain.
+  testing-coverage-review's domain.
 
 ## Evidence requirements
 

@@ -67,7 +67,7 @@ theoretical performance concerns with no evidence of scale.
   designed (a cache with no eviction policy by design), not growth from a
   bug in cleanup.
 - Do not report missing performance tests/benchmarks — that's
-  testing-maintainability-review's domain.
+  testing-coverage-review's domain.
 
 ## Evidence requirements
 

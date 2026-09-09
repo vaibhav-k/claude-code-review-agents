@@ -1,6 +1,6 @@
 ---
 name: data-integrity-review
-description: Reviews a diff for data loss/corruption and functional correctness defects — wrong business logic, unsafe transactions, bad migrations, incorrect money/date/quantity arithmetic, lossy serialization. Invoke when triage routes to data-integrity-review, or directly when a diff touches persisted data, SQL/migrations, or calculation logic.
+description: Reviews a diff for data loss/corruption and functional correctness defects — wrong business logic, unsafe transactions, bad migrations, incorrect money/date/quantity arithmetic, lossy serialization, and structural changes (duplicated logic, dead code) that put correctness at risk. Invoke when triage routes to data-integrity-review, or directly when a diff touches persisted data, SQL/migrations, or calculation logic.
 tools:
   - Read
   - Grep
@@ -48,6 +48,18 @@ and persist the right result.
 - State mutation bugs: a changed function that now mutates a shared/passed-in
   object when callers rely on it not being mutated (or vice versa), causing
   silent data corruption for a caller demonstrably reachable in this diff.
+- Structural correctness risk: this diff introduces a near-identical
+  duplicate of an existing business-rule implementation (not superficial
+  similarity — the same calculation or decision logic copied instead of
+  reused), creating two sources of truth that can silently drift and
+  compute different results for the same input; this diff adds a branch,
+  parameter, or function that is demonstrably unreachable given the diff's
+  own control flow, where the unreachable path was clearly meant to execute
+  (e.g. it contains the only handling for a case the diff's own comments,
+  naming, or sibling branches indicate should be handled). Cap these at
+  MEDIUM unless you can also demonstrate a concrete wrong-output scenario
+  today — the finding is about correctness risk the structure creates, not
+  a stand-alone maintainability opinion.
 
 ## Explicit exclusions
 
@@ -68,8 +80,12 @@ and persist the right result.
   it's security; if the wrong rows are returned/written/computed at all
   regardless of who sees them, it's yours.
 - Do not report missing test coverage for the logic you're reviewing — flag
-  the correctness defect itself; testing-maintainability-review owns
-  coverage gaps.
+  the correctness defect itself; testing-coverage-review owns coverage
+  gaps.
+- Do not report duplication or complexity as a stand-alone style opinion —
+  only report it when you can point to the concrete drift/wrong-output risk
+  described above. Trivial duplication (a shared constant, a short guard
+  clause) is not reportable even under this expanded scope.
 
 ## Evidence requirements
 

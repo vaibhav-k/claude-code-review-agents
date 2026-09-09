@@ -3,6 +3,34 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] — 2026-09-09
+
+### Changed
+
+- Split `testing-maintainability-review` into a dedicated
+  `testing-coverage-review` agent, and folded its maintainability-flavored
+  scope (duplicated business logic, dead/unreachable code) into
+  `data-integrity-review` as a correctness-risk concern, capped at MEDIUM
+  severity unless a concrete wrong-output scenario is also demonstrated.
+  This keeps the total agent count at 8 while giving testing its own
+  specialist.
+- `testing-coverage-review` broadens the old testing scope beyond coverage
+  gaps to test quality in general: flaky-prone patterns (fixed sleeps,
+  unseeded randomness, order dependence) and test-isolation defects
+  (shared/mutated state leaking between tests), still reasoned from the
+  diff alone — no test runner or coverage tool execution.
+- Updated the routing table, architecture table, and validation matrix in
+  `DESIGN.md`, and the agent roster in `README.md`, to match.
+
+### Added
+
+- `.github/ISSUE_TEMPLATE/` and `.github/PULL_REQUEST_TEMPLATE.md`, mirroring
+  the review checklist in `CONTRIBUTING.md`.
+- `tests/fixtures/`: the validation matrix's True Positive / False Positive
+  Trap / Boundary Case snippets as real source files with an expected-verdict
+  manifest, so they can be checked by a human or a CI job instead of only
+  living in prose.
+
 ## [0.1.0] — 2026-09-09
 
 Initial release.

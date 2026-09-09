@@ -1,0 +1,1 @@
+Expected: no finding, or at most a LOW note if genuinely non-obvious - this break fails tsc/the build immediately for every in-repo consumer, so it adds no signal beyond what the compiler already guarantees before merge. Reserve findings for breaks that survive compilation (dynamic-language calls, reflection, a cross-service JSON boundary).

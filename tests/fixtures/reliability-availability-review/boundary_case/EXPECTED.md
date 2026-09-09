@@ -1,0 +1,1 @@
+Expected: no finding - although the catch is broad, the exception is logged and then re-raised unchanged, so the caller still sees the failure. Differs from a swallowing catch only by the raise; read that line before deciding.
