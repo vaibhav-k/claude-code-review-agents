@@ -7,14 +7,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from agent_review.init import init_repo
 
 
-def make_repo(tmp_path: Path):
+def make_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     return repo
 
 
-def test_init_creates_agent_rules_agents_and_design_md(tmp_path: Path):
+def test_init_creates_agent_rules_agents_and_design_md(tmp_path):
     repo = make_repo(tmp_path)
     result = init_repo(repo)
 
@@ -33,22 +33,29 @@ def test_init_creates_agent_rules_agents_and_design_md(tmp_path: Path):
     assert "DESIGN.md" in result.created_files
 
 
-def test_init_adds_agent_cache_to_gitignore(tmp_path: Path):
+def test_init_adds_agent_cache_to_gitignore(tmp_path):
     repo = make_repo(tmp_path)
     init_repo(repo)
     gitignore = (repo / ".gitignore").read_text(encoding="utf-8")
     assert ".agent-cache/" in gitignore.splitlines()
 
 
-def test_init_is_idempotent_and_never_overwrites(tmp_path: Path):
+def test_init_is_idempotent_and_never_overwrites(tmp_path):
     repo = make_repo(tmp_path)
     init_repo(repo)
 
     custom_marker = "# TEAM CUSTOMIZATION -- do not remove\n"
     claude_md = repo / ".agent-rules" / "CLAUDE.md"
-    claude_md.write_text(custom_marker + claude_md.read_text(encoding="utf-8"))
+    # encoding="utf-8" here isn't optional: CLAUDE.md contains real
+    # non-ASCII characters (em dashes), and write_text() without an
+    # explicit encoding falls back to the platform's locale-preferred
+    # one -- UTF-8 on most Linux setups (so this passed silently in CI),
+    # but frequently cp1252 on Windows, which round-trips the em dash to
+    # a single byte that isn't valid UTF-8 and breaks the very next
+    # read_text(encoding="utf-8") call below.
+    claude_md.write_text(custom_marker + claude_md.read_text(encoding="utf-8"), encoding="utf-8")
     design_md = repo / "DESIGN.md"
-    design_md.write_text("# Our real design doc\n")
+    design_md.write_text("# Our real design doc\n", encoding="utf-8")
 
     result = init_repo(repo)
 
@@ -59,9 +66,7 @@ def test_init_is_idempotent_and_never_overwrites(tmp_path: Path):
     assert "DESIGN.md" in result.skipped_files
 
 
-def test_init_on_repo_with_existing_claude_dir_still_creates_agent_rules(
-    tmp_path: Path,
-):
+def test_init_on_repo_with_existing_claude_dir_still_creates_agent_rules(tmp_path):
     # A repo that already has a Claude-Code-native .claude/agents/ should
     # still get its own .agent-rules/ copy from init -- .agent-rules/ is
     # what makes the *CLI* portable across machines without depending on

@@ -7,11 +7,10 @@ tests can't (argument parsing, output formatting, cache-hit reporting
 through the full stack).
 """
 
+import json
 import subprocess
 import sys
 from pathlib import Path
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -45,7 +44,7 @@ class FakeReviewer:
         return "No high-impact issues found."
 
 
-def make_repo(tmp_path: Path):
+def make_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -57,9 +56,7 @@ def make_repo(tmp_path: Path):
     return repo
 
 
-def test_full_cli_review_end_to_end_with_fake_model(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-):
+def test_full_cli_review_end_to_end_with_fake_model(monkeypatch, tmp_path, capsys):
     repo = make_repo(tmp_path)
     (repo / "handlers.py").write_text(
         "def get_user(request):\n"
@@ -85,9 +82,79 @@ def test_full_cli_review_end_to_end_with_fake_model(
     assert "cache misses: 0" in out2
 
 
-def test_fail_on_findings_flag_sets_nonzero_exit(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-):
+def test_json_flag_emits_structured_findings_instead_of_text(monkeypatch, tmp_path, capsys):
+    repo = make_repo(tmp_path)
+    (repo / "handlers.py").write_text(
+        "def get_user(request):\n"
+        '    user_id = request.args.get("id")\n'
+        '    query = f"SELECT * FROM users WHERE id = {user_id}"\n'
+        "    return db.execute(query).fetchone()\n"
+    )
+    monkeypatch.setattr(cli, "AnthropicFoundryReviewer", FakeReviewer)
+
+    exit_code = cli.main(["--path", str(repo), "--jobs", "1", "--json"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+
+    payload = json.loads(out)  # must be the ONLY thing on stdout, and valid JSON
+    assert payload["cache_misses"] == 1
+    assert payload["failed_files"] == []
+    assert payload["missing_agents"] == []
+    assert payload["malformed_agents"] == []
+    assert len(payload["findings"]) == 1
+    finding = payload["findings"][0]
+    assert finding["severity"] == "CRITICAL"
+    assert "SQL injection" in finding["title"]
+
+
+def test_max_files_flag_skips_lower_priority_files_and_reports_them(monkeypatch, tmp_path, capsys):
+    repo = make_repo(tmp_path)
+    (repo / "handlers.py").write_text(
+        "def get_user(request):\n"
+        '    user_id = request.args.get("id")\n'
+        '    query = f"SELECT * FROM users WHERE id = {user_id}"\n'
+        "    return db.execute(query).fetchone()\n"
+    )
+    (repo / "narrow.py").write_text("CACHE_SIZE = 128\ndef compute(x):\n    return x * 2\n")
+    monkeypatch.setattr(cli, "AnthropicFoundryReviewer", FakeReviewer)
+
+    exit_code = cli.main(["--path", str(repo), "--jobs", "1", "--max-files", "1"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "skipped due to --max-files" in out
+    assert "narrow.py" in out
+    assert "SQL injection" in out  # the higher-priority file was still reviewed
+
+
+def test_ignore_findings_yml_suppresses_a_finding_and_reports_it(monkeypatch, tmp_path, capsys):
+    repo = make_repo(tmp_path)
+    (repo / "handlers.py").write_text(
+        "def get_user(request):\n"
+        '    user_id = request.args.get("id")\n'
+        '    query = f"SELECT * FROM users WHERE id = {user_id}"\n'
+        "    return db.execute(query).fetchone()\n"
+    )
+    claude_dir = repo / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "ignore-findings.yml").write_text(
+        "suppressions:\n"
+        "  - agent: security-review\n"
+        '    location: "handlers.py:*"\n'
+        '    reason: "triaged as a non-issue"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cli, "AnthropicFoundryReviewer", FakeReviewer)
+
+    exit_code = cli.main(["--path", str(repo), "--jobs", "1"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "SQL injection" not in out  # suppressed out of the report
+    assert "1 finding(s) suppressed" in out
+    assert "triaged as a non-issue" in out
+    assert "No high-impact issues found." in out
+
+
+def test_fail_on_findings_flag_sets_nonzero_exit(monkeypatch, tmp_path, capsys):
     repo = make_repo(tmp_path)
     (repo / "handlers.py").write_text(
         "def get_user(request):\n"
@@ -101,9 +168,7 @@ def test_fail_on_findings_flag_sets_nonzero_exit(
     assert exit_code == 1
 
 
-def test_clean_diff_yields_zero_exit_even_with_fail_on_findings(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-):
+def test_clean_diff_yields_zero_exit_even_with_fail_on_findings(monkeypatch, tmp_path, capsys):
     repo = make_repo(tmp_path)
     (repo / "handlers.py").write_text("def noop():\n    return 1\n")
     monkeypatch.setattr(cli, "AnthropicFoundryReviewer", FakeReviewer)
@@ -114,9 +179,7 @@ def test_clean_diff_yields_zero_exit_even_with_fail_on_findings(
     assert "No high-impact issues found." in out
 
 
-def test_init_then_review_uses_the_scaffolded_agent_rules(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-):
+def test_init_then_review_uses_the_scaffolded_agent_rules(monkeypatch, tmp_path, capsys):
     repo = make_repo(tmp_path)
     cli.main_init(["--path", str(repo)])
     capsys.readouterr()

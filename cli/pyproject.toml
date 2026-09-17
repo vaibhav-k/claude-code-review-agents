@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-review"
-version = "0.7.1"
+version = "0.9.8"
 description = "Evidence-based automated code review, staged-diff commit messages, and guarded self-healing for any git repository. Talks to Claude exclusively via Microsoft Foundry (Azure AI Foundry)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,6 +19,14 @@ dependencies = [
     # don't have to be exported by hand every session -- never overrides a
     # variable already set in the real environment.
     "python-dotenv>=1.0.0",
+    # Parses the optional .claude/ignore-findings.yml suppression config
+    # (see suppressions.py). A real, well-tested YAML parser is worth a
+    # small dependency here specifically because this file is meant to be
+    # hand-edited by a team with ordinary YAML expectations (quoting,
+    # comments) -- unlike prompts.py's own tiny frontmatter reader, which
+    # deliberately avoids a full parser because it only ever reads a
+    # fixed, tool-generated set of flat scalar fields.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +40,9 @@ dev = [
     "ruff>=0.15.0",
     "mypy>=1.10",
     "azure-identity>=1.15.0",
+    # PyYAML ships no inline type hints -- without its stub package mypy
+    # reports "Library stubs not installed for 'yaml'" on suppressions.py.
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]
@@ -42,7 +53,12 @@ agent-init = "agent_review.cli:main_init"
 where = ["src"]
 
 [tool.setuptools.package-data]
-agent_review = ["default_rules/*.md", "default_rules/agents/*.md"]
+# py.typed (PEP 561 marker): without it, a consumer that imports
+# agent_review from outside this package's own mypy run (e.g.
+# scripts/validate_fixtures.py, which imports it via a sys.path insert
+# rather than as cli/'s own first-party source tree) sees it as an
+# untyped third-party dependency and mypy refuses to use its type hints.
+agent_review = ["default_rules/*.md", "default_rules/agents/*.md", "py.typed"]
 
 [tool.ruff]
 target-version = "py310"

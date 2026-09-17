@@ -6,6 +6,35 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from agent_review import routing
 
 
+def test_is_excluded_from_review_matches_common_lockfiles():
+    for path in (
+        "package-lock.json",
+        "frontend/package-lock.json",
+        "yarn.lock",
+        "poetry.lock",
+        "Cargo.lock",
+        "go.sum",
+    ):
+        assert routing.is_excluded_from_review(path), path
+
+
+def test_is_excluded_from_review_matches_vendored_and_build_dirs():
+    for path in (
+        "node_modules/left-pad/index.js",
+        "vendor/github.com/pkg/errors/errors.go",
+        "dist/bundle.js",
+        "app.min.js",
+    ):
+        assert routing.is_excluded_from_review(path), path
+
+
+def test_is_excluded_from_review_leaves_ordinary_source_and_migrations_alone():
+    # Migrations are data-integrity-review's own scope -- must never be
+    # excluded just because they're "generated" in some looser sense.
+    for path in ("src/handlers.py", "migrations/0007_add_email_index.py", "app.js"):
+        assert not routing.is_excluded_from_review(path), path
+
+
 def test_sql_injection_diff_routes_security():
     diff = """
 +def get_user(request):

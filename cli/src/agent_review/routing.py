@@ -1,5 +1,4 @@
-"""
-Deterministic, zero-API-cost routing.
+"""Deterministic, zero-API-cost routing.
 
 The original triage-router.md agent (in .claude/agents/) spends one model
 call reading diff metadata and keyword signals to decide which specialists
@@ -163,6 +162,62 @@ _AGENT_PATTERNS: dict[str, list[re.Pattern]] = {
         ]
     ],
 }
+
+# Path patterns that never carry review-worthy hand-written logic --
+# lockfiles, vendored/third-party trees, and mechanically generated
+# output. Excluding these BEFORE routing (see run_review() in
+# orchestrator.py), not just from the final report, means they cost zero
+# inference budget, not just zero visible output -- the actual production
+# problem this exists for is a diff that regenerates or bumps one of
+# these and would otherwise burn a full routing+specialist pass on
+# content nobody wrote and nobody wants reviewed. Deliberately does NOT
+# include migration files (data-integrity-review's own scope) or test
+# fixtures -- both carry real, reviewable intent even though they're
+# "generated" in some looser sense.
+_EXCLUDED_PATH_PATTERNS: list[re.Pattern] = [
+    re.compile(p)
+    for p in [
+        # Lockfiles: never hand-edited, byte-for-byte reproducible from their
+        # manifest, and often huge -- exactly the "wastes budget on content
+        # nobody wrote" case.
+        r"(^|/)package-lock\.json$",
+        r"(^|/)yarn\.lock$",
+        r"(^|/)pnpm-lock\.yaml$",
+        r"(^|/)poetry\.lock$",
+        r"(^|/)Pipfile\.lock$",
+        r"(^|/)Cargo\.lock$",
+        r"(^|/)go\.sum$",
+        r"(^|/)composer\.lock$",
+        r"(^|/)Gemfile\.lock$",
+        r"(^|/)uv\.lock$",
+        # Vendored / third-party / dependency trees, wherever they appear in
+        # the tree (a monorepo may vendor at any depth, not just the root).
+        r"(^|/)node_modules/",
+        r"(^|/)vendor/",
+        r"(^|/)third_party/",
+        r"(^|/)\.venv/",
+        r"(^|/)venv/",
+        # Minified and common build/dist output -- mechanically derived from
+        # source that (if it's part of this diff at all) is reviewed in its
+        # own right; the compiled artifact adds no additional signal.
+        r"\.min\.(js|css)$",
+        r"(^|/)dist/",
+        r"(^|/)build/",
+        # Common generated-code markers across ecosystems: protobuf/gRPC
+        # stubs, and anything a generator has explicitly labeled as such.
+        r"\.pb\.go$",
+        r"_pb2(_grpc)?\.py$",
+        r"\.generated\.\w+$",
+    ]
+]
+
+
+def is_excluded_from_review(path: str) -> bool:
+    """True if `path` matches one of the always-excluded patterns above
+    -- checked before routing, so an excluded file costs zero inference
+    budget rather than merely being filtered out of the final report.
+    """
+    return any(pattern.search(path) for pattern in _EXCLUDED_PATH_PATTERNS)
 
 
 @dataclasses.dataclass(frozen=True)

@@ -69,7 +69,8 @@ def is_git_repo(repo: Path) -> bool:
 
 
 def resolve_base_ref(repo: Path, requested: str | None) -> str:
-    """Pick a sensible base ref to diff against.
+    """
+    Pick a sensible base ref to diff against.
 
     Honors an explicit `requested` ref if it resolves. Otherwise tries
     `origin/main`, then `origin/master`, then falls back to the repo's
@@ -90,7 +91,8 @@ def resolve_base_ref(repo: Path, requested: str | None) -> str:
 
 
 def changed_files(repo: Path, base_ref: str) -> list[ChangedFile]:
-    """Files that differ between base_ref and the current working tree,
+    """
+    Files that differ between base_ref and the current working tree,
     including uncommitted changes (staged and unstaged) *and* untracked
     files git doesn't know about yet.
 
@@ -121,7 +123,8 @@ def changed_files(repo: Path, base_ref: str) -> list[ChangedFile]:
 
 
 def diff_for_file(repo: Path, base_ref: str, path: str) -> str:
-    """Unified diff for a single file, base_ref..working tree.
+    """
+    Unified diff for a single file, base_ref..working tree.
 
     Untracked files aren't reachable through `git diff <ref> -- <path>`
     (git has no record of them at any ref), so those are instead diffed
@@ -140,17 +143,19 @@ def diff_for_file(repo: Path, base_ref: str, path: str) -> str:
         return _run(repo, "diff", base_ref, "--", path)
 
     try:
+        # `path` (relative to `repo`), not `full_path`: git's --no-index
+        # diff writes back whatever file argument it was given verbatim
+        # into the "a/... b/..." header and hunk markers, so passing the
+        # absolute path here would leak the reviewing machine's local
+        # filesystem layout (home directory name, checkout location, etc.)
+        # straight into the text sent to the model, and would make this
+        # the one diff shape in the whole run that isn't relative to the
+        # repo -- inconsistent with every other diff produced by this
+        # module, and not reproducibly hashable for cassette-based tests
+        # (the same logical diff would hash differently depending on
+        # where the repo happens to be checked out).
         result = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(repo),
-                "diff",
-                "--no-index",
-                "--",
-                "/dev/null",
-                str(full_path),
-            ],
+            ["git", "-C", str(repo), "diff", "--no-index", "--", "/dev/null", path],
             capture_output=True,
             text=True,
             timeout=DEFAULT_GIT_TIMEOUT_SECONDS,

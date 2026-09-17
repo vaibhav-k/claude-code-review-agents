@@ -1,5 +1,4 @@
-"""
-``agent-init``: scaffold a target repository for use with agent-review.
+"""``agent-init``: scaffold a target repository for use with agent-review.
 
 Injects three things into the target repo, all idempotently (re-running
 this is always safe -- it never overwrites a file that's already there):
@@ -84,16 +83,23 @@ def init_repo(repo_root: Path) -> InitResult:
 
     default_dir = bundled_default_dir()
 
+    # .as_posix(), not str(): every other path this CLI surfaces (git's
+    # own output, routing decisions, findings' `file:line` locations) is
+    # forward-slash, and str(Path) on Windows produces backslashes --
+    # str() here would make created_files/skipped_files the one place in
+    # the whole CLI where a path's separator depends on the reviewing
+    # machine's OS, which breaks exact-match consumers (this module's own
+    # tests included) on Windows specifically.
     claude_md_dest = rules_dir / CLAUDE_MD_FILENAME
     if claude_md_dest.exists():
-        skipped.append(str(claude_md_dest.relative_to(repo_root)))
+        skipped.append(claude_md_dest.relative_to(repo_root).as_posix())
     else:
         shutil.copyfile(default_dir / CLAUDE_MD_FILENAME, claude_md_dest)
-        created.append(str(claude_md_dest.relative_to(repo_root)))
+        created.append(claude_md_dest.relative_to(repo_root).as_posix())
 
     for agent_file in sorted((default_dir / AGENTS_SUBDIRNAME).glob("*.md")):
         dest = agents_dir / agent_file.name
-        rel = str(dest.relative_to(repo_root))
+        rel = dest.relative_to(repo_root).as_posix()
         if dest.exists():
             skipped.append(rel)
             continue

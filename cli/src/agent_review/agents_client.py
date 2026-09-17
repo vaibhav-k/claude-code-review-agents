@@ -1,5 +1,4 @@
-"""
-Thin wrapper around Claude, called exclusively via Microsoft Foundry
+"""Thin wrapper around Claude, called exclusively via Microsoft Foundry
 (Azure AI Foundry) -- there is no direct-to-api.anthropic.com code path
 in this CLI. This project uses Azure only.
 
@@ -28,7 +27,7 @@ to accept the exact keywords this file calls it with.
 from __future__ import annotations
 
 import os
-from typing import Protocol
+from typing import Any, Protocol
 
 # Must match a model actually GA in Microsoft Foundry's catalog, not just
 # any Anthropic model name -- Foundry's catalog and api.anthropic.com's
@@ -66,9 +65,113 @@ class Reviewer(Protocol):
         ...
 
 
-class AnthropicFoundryReviewer:
+def _import_anthropic_foundry() -> Any:
+    """Deferred import of `anthropic.AnthropicFoundry` -- see the module
+    docstring: makes a missing/too-old `anthropic` package a clean
+    RuntimeError instead of an import-time crash for every user of this
+    module, including tests that never construct AnthropicFoundryReviewer
+    at all.
     """
-    Real implementation: Claude via Microsoft Foundry. Used when
+    try:
+        from anthropic import AnthropicFoundry  # noqa: PLC0415
+    except ImportError as exc:
+        raise RuntimeError(
+            "The 'anthropic' package (>=0.74.0, for Microsoft Foundry "
+            "support) is required to run a real review. Install it "
+            "with: pip install -U anthropic"
+        ) from exc
+    return AnthropicFoundry
+
+
+def _resolve_endpoint(resource: str | None) -> tuple[str, str]:
+    """Resolves (resolved_resource, resolved_base_url) from an explicit
+    `resource` argument and the two environment variables, and enforces
+    that exactly one of the two endpoint forms is configured -- see
+    AnthropicFoundryReviewer's docstring for why they're mutually
+    exclusive, and the .strip() calls' own comment history for why
+    whitespace is stripped before the `or` fallback chain, not after.
+    """
+    resolved_resource = (resource or os.environ.get(ENV_RESOURCE) or "").strip()
+    resolved_base_url = (os.environ.get(ENV_BASE_URL) or "").strip()
+    if resolved_base_url and resolved_resource:
+        raise RuntimeError(
+            f"Both {ENV_BASE_URL} and a Foundry resource "
+            f"({ENV_RESOURCE}, or --resource) are set -- these are "
+            f"mutually exclusive. Unset {ENV_BASE_URL} unless you "
+            "specifically need to override the resource-derived endpoint."
+        )
+    if not resolved_base_url and not resolved_resource:
+        raise RuntimeError(
+            f"No Microsoft Foundry resource configured. Set the "
+            f"{ENV_RESOURCE} environment variable to your "
+            "Foundry resource name (or pass resource= explicitly), or "
+            f"set {ENV_BASE_URL} to a custom endpoint URL."
+        )
+    return resolved_resource, resolved_base_url
+
+
+def _endpoint_kwargs(resolved_resource: str, resolved_base_url: str) -> dict[str, str]:
+    """The one piece of `AnthropicFoundry`'s constructor kwargs that
+    varies by which endpoint form was configured -- shared by both auth
+    branches below so that choice is made in exactly one place.
+    """
+    if resolved_base_url:
+        return {"base_url": resolved_base_url}
+    return {"resource": resolved_resource}
+
+
+def _build_entra_id_client(
+    anthropic_foundry_cls: Any, resolved_resource: str, resolved_base_url: str
+) -> Any:
+    try:
+        from azure.identity import (  # noqa: PLC0415 -- azure-identity stays
+            DefaultAzureCredential,  # optional, needed only when Entra ID
+            get_bearer_token_provider,  # auth is actually used.
+        )
+    except ImportError as exc:
+        raise RuntimeError(
+            "Entra ID auth requires the 'azure-identity' package. "
+            "Install it with: pip install azure-identity"
+        ) from exc
+    token_provider = get_bearer_token_provider(DefaultAzureCredential(), _ENTRA_SCOPE)
+    return anthropic_foundry_cls(
+        azure_ad_token_provider=token_provider,
+        **_endpoint_kwargs(resolved_resource, resolved_base_url),
+    )
+
+
+def _build_api_key_client(
+    anthropic_foundry_cls: Any,
+    api_key: str | None,
+    resolved_resource: str,
+    resolved_base_url: str,
+) -> Any:
+    resolved_key = (api_key or os.environ.get(ENV_API_KEY) or "").strip()
+    if not resolved_key:
+        raise RuntimeError(
+            f"No Microsoft Foundry API key found. Set the "
+            f"{ENV_API_KEY} environment variable (or pass "
+            "api_key= explicitly), or set use_entra_id=True / "
+            f"{ENV_USE_ENTRA_ID}=1 to authenticate via "
+            "Entra ID instead."
+        )
+    return anthropic_foundry_cls(
+        api_key=resolved_key, **_endpoint_kwargs(resolved_resource, resolved_base_url)
+    )
+
+
+def _resolve_model(model: str | None) -> str:
+    # Each candidate is stripped BEFORE the `or` fallback chain, not
+    # after: a whitespace-only value is truthy to `or` (it's a non-empty
+    # string), so stripping only the final result would let
+    # ANTHROPIC_FOUNDRY_MODEL="   " win over DEFAULT_MODEL instead of
+    # being treated as unset -- caught by
+    # test_empty_model_env_var_falls_back_to_default.
+    return (model or "").strip() or (os.environ.get(ENV_MODEL) or "").strip() or DEFAULT_MODEL
+
+
+class AnthropicFoundryReviewer:
+    """Real implementation: Claude via Microsoft Foundry. Used when
     actually talking to the API.
 
     Requires the `anthropic` package (>=0.74.0, when `AnthropicFoundry`
@@ -108,105 +211,22 @@ class AnthropicFoundryReviewer:
         model: str | None = None,
         use_entra_id: bool | None = None,
     ):
-        try:
-            from anthropic import AnthropicFoundry  # noqa: PLC0415 -- deliberately
-            # deferred: makes a missing/too-old `anthropic` package a clean
-            # RuntimeError instead of an import-time crash for every user of
-            # this module, including tests that never construct
-            # AnthropicFoundryReviewer at all.
-        except ImportError as exc:
-            raise RuntimeError(
-                "The 'anthropic' package (>=0.74.0, for Microsoft Foundry "
-                "support) is required to run a real review. Install it "
-                "with: pip install -U anthropic"
-            ) from exc
-
-        # .strip(): a resource name or key copied from a browser, a .env
-        # file, or a PowerShell here-string very commonly picks up a
-        # trailing newline or stray space. Left in, it becomes part of
-        # the request (the resource name is spliced straight into the
-        # hostname; the key goes straight into the Authorization header),
-        # producing an opaque connection or 401 error that looks
-        # identical to a genuinely wrong credential -- strip it here so
-        # that specific, very common mistake is eliminated up front.
-        resolved_resource = (resource or os.environ.get(ENV_RESOURCE) or "").strip()
-        # ANTHROPIC_FOUNDRY_BASE_URL (env-var only -- no --base-url flag,
-        # matching .env.example's own framing of this as an advanced,
-        # rarely-needed override): a custom endpoint in place of the
-        # resource-derived one. `anthropic.AnthropicFoundry` itself treats
-        # base_url and resource as mutually exclusive (it raises if both
-        # are non-None), so that's enforced here too, with a clearer
-        # message than the SDK's -- and, critically, resolved_resource is
-        # NOT required when a base_url is supplied instead.
-        resolved_base_url = (os.environ.get(ENV_BASE_URL) or "").strip()
-        if resolved_base_url and resolved_resource:
-            raise RuntimeError(
-                f"Both {ENV_BASE_URL} and a Foundry resource "
-                f"({ENV_RESOURCE}, or --resource) are set -- these are "
-                f"mutually exclusive. Unset {ENV_BASE_URL} unless you "
-                "specifically need to override the resource-derived endpoint."
-            )
-        if not resolved_base_url and not resolved_resource:
-            raise RuntimeError(
-                f"No Microsoft Foundry resource configured. Set the "
-                f"{ENV_RESOURCE} environment variable to your "
-                "Foundry resource name (or pass resource= explicitly), or "
-                f"set {ENV_BASE_URL} to a custom endpoint URL."
-            )
+        anthropic_foundry_cls = _import_anthropic_foundry()
+        resolved_resource, resolved_base_url = _resolve_endpoint(resource)
 
         if use_entra_id is None:
             use_entra_id = _env_flag(ENV_USE_ENTRA_ID)
 
         if use_entra_id:
-            try:
-                from azure.identity import (  # noqa: PLC0415 -- same reasoning
-                    DefaultAzureCredential,  # as the anthropic import above:
-                    get_bearer_token_provider,  # azure-identity stays optional,
-                )  # needed only when Entra ID auth is actually used.
-            except ImportError as exc:
-                raise RuntimeError(
-                    "Entra ID auth requires the 'azure-identity' package. "
-                    "Install it with: pip install azure-identity"
-                ) from exc
-            token_provider = get_bearer_token_provider(DefaultAzureCredential(), _ENTRA_SCOPE)
-            if resolved_base_url:
-                self._client = AnthropicFoundry(
-                    azure_ad_token_provider=token_provider, base_url=resolved_base_url
-                )
-            else:
-                self._client = AnthropicFoundry(
-                    azure_ad_token_provider=token_provider, resource=resolved_resource
-                )
+            self._client = _build_entra_id_client(
+                anthropic_foundry_cls, resolved_resource, resolved_base_url
+            )
         else:
-            resolved_key = (api_key or os.environ.get(ENV_API_KEY) or "").strip()
-            if not resolved_key:
-                raise RuntimeError(
-                    f"No Microsoft Foundry API key found. Set the "
-                    f"{ENV_API_KEY} environment variable (or pass "
-                    "api_key= explicitly), or set use_entra_id=True / "
-                    f"{ENV_USE_ENTRA_ID}=1 to authenticate via "
-                    "Entra ID instead."
-                )
-            if resolved_base_url:
-                self._client = AnthropicFoundry(api_key=resolved_key, base_url=resolved_base_url)
-            else:
-                self._client = AnthropicFoundry(api_key=resolved_key, resource=resolved_resource)
+            self._client = _build_api_key_client(
+                anthropic_foundry_cls, api_key, resolved_resource, resolved_base_url
+            )
 
-        # Same precedence and whitespace-stripping treatment as
-        # resource/api_key above, for the same reasons (a deployment name
-        # pasted from the Foundry portal picks up stray whitespace just
-        # as easily as a resource name or key does). Each candidate is
-        # stripped BEFORE the `or` fallback chain, not after: a
-        # whitespace-only value is truthy to `or` (it's a non-empty
-        # string), so stripping only the final result would let
-        # ANTHROPIC_FOUNDRY_MODEL="   " win over DEFAULT_MODEL instead of
-        # being treated as unset -- caught by
-        # test_empty_model_env_var_falls_back_to_default.
-        self._model = (
-            (model or "").strip()
-            or (os.environ.get(ENV_MODEL) or "").strip()
-            or DEFAULT_MODEL
-        )
+        self._model = _resolve_model(model)
 
     def complete(self, system_prompt: str, user_message: str) -> str:
         try:
@@ -244,6 +264,25 @@ class AnthropicFoundryReviewer:
                     "'gpt-5.2-1' or 'claude-sonnet-4-6' -- those are model "
                     "deployment names, used as --model/DEFAULT_MODEL, not "
                     "the resource)."
+                ) from exc
+            # Real-world trigger (2026-09-17): the opposite mix-up from
+            # the one above -- ANTHROPIC_FOUNDRY_RESOURCE is right, but
+            # `self._model` isn't actually deployed *in that resource*
+            # for deploymentless inference, and Foundry's own error body
+            # only names this as {"error": {"code": "DeploymentError",
+            # ...}}, not a distinct exception type -- matched on the
+            # rendered message (every anthropic.APIStatusError's str()
+            # includes its parsed error body) rather than a `.body`/
+            # `.code` attribute shape this module has no live access to
+            # verify against without a real Foundry resource.
+            if "DeploymentError" in str(exc):
+                raise RuntimeError(
+                    f"{exc}\n\nYour Foundry resource doesn't have "
+                    f"'{self._model}' deployed for deploymentless "
+                    "inference. Either deploy that model in the Foundry "
+                    "portal for this resource, or point this CLI at a "
+                    f"model that's already deployed there via {ENV_MODEL} "
+                    "(or --model)."
                 ) from exc
             raise
         return "".join(block.text for block in response.content if block.type == "text")

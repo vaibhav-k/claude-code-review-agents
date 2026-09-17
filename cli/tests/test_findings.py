@@ -47,6 +47,32 @@ def test_malformed_text_yields_no_crash_and_no_findings():
     assert findings.parse("security-review", "") == []
 
 
+def test_is_malformed_response_true_for_empty_text():
+    assert findings.is_malformed_response("", []) is True
+    assert findings.is_malformed_response("   \n  ", []) is True
+
+
+def test_is_malformed_response_true_for_off_contract_text_with_no_findings():
+    # The exact silent-failure case this exists to catch: a response that
+    # drifted off the output contract (extra prose, no [SEVERITY] header)
+    # parses to zero findings, same as a genuine clean review -- but it
+    # is NOT NO_FINDINGS_TEXT, so it must be flagged, not treated as clean.
+    raw = "I looked at the diff and didn't see anything worth flagging."
+    assert findings.is_malformed_response(raw, findings.parse("security-review", raw)) is True
+
+
+def test_is_malformed_response_false_for_genuine_no_findings_sentinel():
+    raw = "No high-impact issues found."
+    assert findings.is_malformed_response(raw, findings.parse("security-review", raw)) is False
+
+
+def test_is_malformed_response_false_when_findings_were_actually_parsed():
+    raw = "[HIGH] a.py:1 — an issue\nImpact: impact\nFix: fix\n"
+    parsed = findings.parse("security-review", raw)
+    assert parsed  # sanity: this test's own premise
+    assert findings.is_malformed_response(raw, parsed) is False
+
+
 def test_sort_orders_by_severity_then_location():
     raw = [
         findings.Finding("LOW", "z.py:1", "t", "i", "f", "a1"),

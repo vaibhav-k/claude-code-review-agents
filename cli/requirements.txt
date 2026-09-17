@@ -12,12 +12,17 @@
 # Foundry) -- there is no direct-to-api.anthropic.com code path. 0.74.0 is
 # the first anthropic-python release with the AnthropicFoundry client class.
 
-anthropic>=0.74.0
+anthropic==1.4.0
 
 # Loads .env files (see .env.example) so ANTHROPIC_FOUNDRY_RESOURCE/etc.
 # don't have to be exported by hand every session -- never overrides a
 # variable already set in the real environment.
 python-dotenv==1.2.3
+
+# Parses the optional .claude/ignore-findings.yml suppression config (see
+# suppressions.py). A real parser is worth the dependency here since this
+# file is meant to be hand-edited with ordinary YAML expectations.
+pyyaml==6.0.3
 
 # Uncomment if authenticating to Microsoft Foundry via Entra ID (Azure AD)
 # rather than an API key (ANTHROPIC_FOUNDRY_USE_ENTRA_ID=1 / --use-entra-id):

@@ -1,5 +1,4 @@
-"""
-Console-script entry points.
+"""Console-script entry points.
 
 Two binaries get installed (see ``pyproject.toml``'s ``[project.scripts]``):
 
@@ -19,6 +18,8 @@ works from inside its own source checkout.
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import json
 import sys
 from pathlib import Path
 
@@ -44,6 +45,7 @@ from .healing import (
 from .init import init_repo
 from .orchestrator import ReviewRun, run_review
 from .prompts import load_agent_prompts
+from .suppressions import SUPPRESSIONS_PATH
 
 _REVIEW_CMD = "review"
 _COMMIT_CMD = "commit"
@@ -72,7 +74,7 @@ def _load_dotenv_if_present() -> None:
     over a nice-to-have.
     """
     try:
-        from dotenv import find_dotenv, load_dotenv  # noqa: PLC0415 -- optional
+        from dotenv import find_dotenv, load_dotenv  # noqa: PLC0415 -- optional,
 
         # deferred so a missing python-dotenv can never break commands
         # that don't need .env support at all (e.g. --help).
@@ -119,6 +121,37 @@ def _print_review(run: ReviewRun) -> None:
         )
         for path, agent in missing:
             print(f"  {path}: {agent}")
+    malformed = sorted({(f.path, agent) for f in run.files for agent in f.malformed_agents})
+    if malformed:
+        print(
+            f"Warning: {len(malformed)} specialist call(s) returned a response "
+            "that didn't match the expected output format -- not cached, will "
+            "retry next run, but this diff was NOT actually reviewed by them "
+            "this time:"
+        )
+        for path, agent in malformed:
+            print(f"  {path}: {agent}")
+    truncated = sorted(f.path for f in run.files if f.truncated)
+    if truncated:
+        print(
+            f"Note: {len(truncated)} file(s) had a diff too large to send in full "
+            "-- only a truncated prefix was reviewed:"
+        )
+        for path in truncated:
+            print(f"  {path}")
+    if run.skipped_for_budget:
+        print(
+            f"Note: {len(run.skipped_for_budget)} file(s) were skipped due to "
+            "--max-files and were not reviewed at all this run:"
+        )
+        for path in run.skipped_for_budget:
+            print(f"  {path}")
+    if run.suppressed:
+        print(
+            f"Note: {len(run.suppressed)} finding(s) suppressed by {SUPPRESSIONS_PATH.as_posix()}:"
+        )
+        for s in run.suppressed:
+            print(f"  {s.path}: [{s.finding.severity}] {s.finding.location} — {s.reason}")
     print()
     if not run.all_findings:
         print("No high-impact issues found.")
@@ -128,18 +161,66 @@ def _print_review(run: ReviewRun) -> None:
         print()
 
 
+def _review_run_to_dict(run: ReviewRun) -> dict:
+    """Structured form of a ReviewRun for `--json`, so a CI/CD pipeline
+    can consume findings (and the same warnings _print_review shows a
+    human) programmatically -- without regex-parsing this tool's own
+    human-readable stdout, which is exactly the brittleness this is meant
+    to remove. Deliberately built here, not on ReviewRun/Finding
+    themselves: this is an output-format concern, kept alongside the rest
+    of this module's rendering (_print_review, the plain-text default).
+    """
+    return {
+        "base_ref": run.base_ref,
+        "files_analyzed": len(run.files),
+        "cache_hits": run.cache_hits,
+        "cache_misses": run.cache_misses,
+        "failed_files": [{"path": f.path, "error": f.error} for f in run.failed_files],
+        "missing_agents": [
+            {"path": f.path, "agent": agent} for f in run.files for agent in f.missing_agents
+        ],
+        "malformed_agents": [
+            {"path": f.path, "agent": agent} for f in run.files for agent in f.malformed_agents
+        ],
+        "truncated_files": [f.path for f in run.files if f.truncated],
+        "skipped_for_budget": run.skipped_for_budget,
+        "suppressed": [
+            {
+                "path": s.path,
+                "agent": s.finding.agent,
+                "location": s.finding.location,
+                "severity": s.finding.severity,
+                "reason": s.reason,
+            }
+            for s in run.suppressed
+        ],
+        "findings": [dataclasses.asdict(finding) for finding in run.all_findings],
+    }
+
+
 def cmd_review(args: argparse.Namespace) -> int:
     repo = _resolve_git_repo(args.path)
     prompts = load_agent_prompts(repo)
     cache = AgentCache(repo)
     reviewer = _build_reviewer(args)
     try:
-        run = run_review(repo, args.base, prompts, cache, reviewer, max_workers=args.jobs)
+        run = run_review(
+            repo,
+            args.base,
+            prompts,
+            cache,
+            reviewer,
+            max_workers=args.jobs,
+            max_files=args.max_files,
+        )
     except Exception as exc:
         # Surface API/network failures cleanly, not as a raw traceback
         # from inside a worker thread.
         raise SystemExit(f"error: review failed: {exc}") from exc
-    _print_review(run)
+    if args.json:
+        print(json.dumps(_review_run_to_dict(run), indent=2))
+    else:
+        _print_review(run)
     if args.fail_on_findings:
         has_blocking = any(f.severity in ("CRITICAL", "HIGH") for f in run.all_findings)
         return 1 if has_blocking else 0
@@ -305,6 +386,29 @@ def build_review_parser() -> argparse.ArgumentParser:
         "--fail-on-findings",
         action="store_true",
         help="Exit with status 1 if any CRITICAL/HIGH finding is reported (for CI).",
+    )
+    review.add_argument(
+        "--max-files",
+        type=int,
+        default=None,
+        help=(
+            "Cap the number of routed files reviewed in one run (default: no "
+            "cap). Files matched by the most specialists (routing.py's own "
+            "decision) are kept first; the rest are skipped entirely for this "
+            "run, reported separately from findings, and picked up again "
+            "whenever a later run's file set fits under the cap. For a "
+            "pathologically wide diff (a huge rename, a generated-content "
+            "commit) rather than for everyday use."
+        ),
+    )
+    review.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Print findings (and the same warnings the default output shows) as "
+            "JSON instead of human-readable text, for CI/CD pipelines to consume "
+            "programmatically instead of parsing this tool's own text output."
+        ),
     )
     review.set_defaults(func=cmd_review)
 

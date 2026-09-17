@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from agent_review import git_utils
 
 
-def make_repo(tmp_path: Path):
+def make_repo(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
@@ -19,13 +19,13 @@ def make_repo(tmp_path: Path):
     return repo
 
 
-def test_is_git_repo(tmp_path: Path):
+def test_is_git_repo(tmp_path):
     repo = make_repo(tmp_path)
     assert git_utils.is_git_repo(repo)
     assert not git_utils.is_git_repo(tmp_path)
 
 
-def test_changed_files_detects_modification_and_untracked(tmp_path: Path):
+def test_changed_files_detects_modification_and_untracked(tmp_path):
     repo = make_repo(tmp_path)
     base = git_utils.current_commit(repo)
     (repo / "a.py").write_text("x = 2\n")
@@ -39,7 +39,7 @@ def test_changed_files_detects_modification_and_untracked(tmp_path: Path):
     assert paths["b.py"] == "A"
 
 
-def test_diff_for_file_untracked_shows_whole_file_as_added(tmp_path: Path):
+def test_diff_for_file_untracked_shows_whole_file_as_added(tmp_path):
     repo = make_repo(tmp_path)
     base = git_utils.current_commit(repo)
     (repo / "b.py").write_text("y = 1\n")
@@ -47,7 +47,25 @@ def test_diff_for_file_untracked_shows_whole_file_as_added(tmp_path: Path):
     assert "+y = 1" in diff
 
 
-def test_diff_for_file_contains_change(tmp_path: Path):
+def test_diff_for_file_untracked_uses_relative_path_not_absolute(tmp_path):
+    # Regression test: the --no-index branch used to pass the absolute
+    # path on disk to `git diff`, which git then wrote verbatim into the
+    # "a/... b/..." header -- leaking the local checkout location into
+    # whatever consumes this diff (a model prompt, a cache key, a test
+    # cassette hash) and making it the only diff shape in the whole
+    # module that isn't relative to the repo. Same logical new-file diff
+    # must now look identical no matter where the repo lives on disk.
+    repo = make_repo(tmp_path)
+    base = git_utils.current_commit(repo)
+    nested = repo / "pkg"
+    nested.mkdir()
+    (nested / "b.py").write_text("y = 1\n")
+    diff = git_utils.diff_for_file(repo, base, "pkg/b.py")
+    assert "+++ b/pkg/b.py" in diff
+    assert str(repo) not in diff
+
+
+def test_diff_for_file_contains_change(tmp_path):
     repo = make_repo(tmp_path)
     base = git_utils.current_commit(repo)
     (repo / "a.py").write_text("x = 2\n")
@@ -56,7 +74,7 @@ def test_diff_for_file_contains_change(tmp_path: Path):
     assert "+x = 2" in diff
 
 
-def test_blob_hash_changes_with_content(tmp_path: Path):
+def test_blob_hash_changes_with_content(tmp_path):
     repo = make_repo(tmp_path)
     h1 = git_utils.blob_hash(repo, "a.py")
     (repo / "a.py").write_text("x = 999\n")
@@ -65,9 +83,7 @@ def test_blob_hash_changes_with_content(tmp_path: Path):
     assert git_utils.blob_hash(repo, "does_not_exist.py") is None
 
 
-def test_resolve_base_ref_falls_back_to_empty_tree_when_nothing_resolves(
-    tmp_path: Path,
-):
+def test_resolve_base_ref_falls_back_to_empty_tree_when_nothing_resolves(tmp_path):
     repo = make_repo(tmp_path)
     # Neither "main" nor "master" (local or origin/) exists once the
     # current branch is renamed to something else entirely -- this must
@@ -79,14 +95,14 @@ def test_resolve_base_ref_falls_back_to_empty_tree_when_nothing_resolves(
     assert ref == git_utils.EMPTY_TREE_SENTINEL
 
 
-def test_resolve_base_ref_honors_an_explicit_resolvable_ref(tmp_path: Path):
+def test_resolve_base_ref_honors_an_explicit_resolvable_ref(tmp_path):
     repo = make_repo(tmp_path)
     subprocess.run(["git", "branch", "feature"], cwd=repo, check=True)
     ref = git_utils.resolve_base_ref(repo, "feature")
     assert ref == "feature"
 
 
-def test_resolve_base_ref_prefers_origin_main_over_local_main(tmp_path: Path):
+def test_resolve_base_ref_prefers_origin_main_over_local_main(tmp_path):
     repo = make_repo(tmp_path)
     subprocess.run(["git", "branch", "-M", "main"], cwd=repo, check=True)
     base_sha = git_utils.current_commit(repo)

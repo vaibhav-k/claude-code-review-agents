@@ -1,5 +1,4 @@
-"""
-Local, per-repo cache (`.agent-cache/`) that makes repeat runs
+"""Local, per-repo cache (`.agent-cache/`) that makes repeat runs
 incremental instead of re-analyzing every file from scratch.
 
 The cache lives inside the TARGET repository (not globally, and not only
@@ -83,7 +82,7 @@ class AgentCache:
             "files": {path: dataclasses.asdict(entry) for path, entry in self._entries.items()},
         }
         tmp_path = self.manifest_path.with_suffix(".json.tmp")
-        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
         tmp_path.replace(self.manifest_path)  # atomic on POSIX and Windows
 
     # -- lookups ---------------------------------------------------------
