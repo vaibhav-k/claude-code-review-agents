@@ -150,21 +150,43 @@ there's no direct-to-Anthropic-API path, by design.
 It also generates commit messages for your staged diff (no co-author
 trailer added — that's your commit) and can run a repo's detected test
 suite, proposing a fix on failure that's only ever written to disk if you
-pass `--apply`. See [`cli/README.md`](cli/README.md) for full usage, and
-`DESIGN.md` Section G for the architecture — including "Honest
-limitations," which now also covers what a real end-to-end run against a
-live Foundry resource surfaced (and how it was fixed) beyond what the
-automated test suite alone could catch.
+pass `--apply`. Beyond the core review loop, the CLI adds three things the
+in-Claude-Code agents above don't need for themselves: a diff/file budget
+so a huge changeset degrades gracefully (truncating an oversized file's
+diff, skipping the tail of a file list past `--max-files`) rather than
+blowing past context limits or silently doing less than it claims;
+structured-output guards that detect and warn about a specialist response
+that doesn't match the expected finding format instead of silently
+treating it as "no finding"; and an optional `.claude/ignore-findings.yml`
+so a team can mark an accepted false positive as suppressed (logged, not
+silently dropped) without editing the agent's prompt. See
+[`cli/README.md`](cli/README.md) for full usage, and `DESIGN.md` Section G
+for the architecture — including "Honest limitations," which now also
+covers what a real end-to-end run against a live Foundry resource
+surfaced (and how it was fixed) beyond what the automated test suite alone
+could catch.
 
 ## Development
 
 `tests/fixtures/` holds the validation matrix from `DESIGN.md` Section E as
 real source files, one folder per true-positive / false-positive-trap /
 boundary case, each with an `EXPECTED.md` describing the correct verdict —
-useful for sanity-checking a prompt change before opening a PR.
-`.github/workflows/validate-agents.yml` is a starting point for wiring
-these into CI; it's scaffolding, not a finished pipeline (see the TODOs in
-that file).
+useful for sanity-checking a prompt change before opening a PR, and run
+automatically on every PR by `.github/workflows/validate-agents.yml` via
+`scripts/validate_fixtures.py` (see `tests/fixtures/README.md` for how the
+record/replay cassette behind it works). That script prints a `[i/N]
+agent/case ...` progress marker before each case and its PASS/FAIL result
+the instant it finishes, rather than going silent until the whole manifest
+is done — worth knowing about since `--live` mode makes a real network
+call per case and can take a while. `.github/workflows/cli-ci.yml`
+separately runs `cli/`'s own pytest/ruff/mypy/pyright suite, which now
+includes `cli/tests/test_cli_integration_live.py` — an opt-in live/replay
+integration test for the orchestrator, cassette-backed by default and
+switchable to a real Foundry call with `AGENT_REVIEW_RECORD_LIVE=1`. See
+`DESIGN.md`'s "CI/CD validation harness and cassette testing" for the full
+design of both. A bare `pytest` run from the repo root runs `cli/tests/`
+only, per the root `pytest.ini` — `tests/fixtures/` is deliberately not a
+pytest suite (see that file's own comment for why).
 
 ## Documentation
 
@@ -187,20 +209,37 @@ that file).
   grants) are the conservative, well-established subset. If your Claude
   Code version supports additional fields, that's fine — nothing here
   depends on more than this subset.
-- The validation matrix in `DESIGN.md` is a hand-written acceptance
-  suite; it has not been executed against a live Claude Code install as
-  part of this repository. Run it once in your own environment before
-  trusting these agents in CI.
+- The validation matrix in `DESIGN.md` Section E has, at this point, been
+  run against a real Foundry-hosted model five separate times (see
+  `CHANGELOG.md` 0.9.1 through 0.9.7 and DESIGN.md's five "real `--live`
+  run" write-ups), each round fixing whatever the previous round's real
+  model responses actually got wrong — not just the two placeholder-vs-
+  wiring checks CI runs on every PR. That history is worth reading before
+  assuming a "no finding" verdict from these prompts is bulletproof: a
+  live LLM's judgment on a genuinely ambiguous boundary case is
+  probabilistic, not a deterministic test suite, and a few cases in that
+  history needed the underlying fixture fixed (not just the prompt) after
+  multiple rounds of prompt-only fixes failed to change a live model's
+  verdict — see "Fourth real `--live` run" in `DESIGN.md` for why. Run
+  `scripts/validate_fixtures.py --live` again in your own environment
+  after changing any agent's prompt; don't assume last round's fix still
+  holds without checking.
 - This system reviews diffs; it does not replace human review for design
   intent, product correctness, or anything the evidence bar can't establish
   from the code itself.
-- `cli/`'s build/test environment still has no Foundry resource or
-  credentials configured, so its automated suite tests orchestration
-  logic (routing, caching, git diffing) against a fake, in-memory model
-  client, not a live one. It has, however, since been run for real by an
-  actual user against a real Microsoft Foundry resource and a real repo
-  and produced a correct (clean) review -- see `DESIGN.md` Section G's
-  "Honest limitations" for what that first live run surfaced (and fixed).
+- `cli/`'s automated suite mostly tests orchestration logic (routing,
+  caching, git diffing) against a fake, in-memory model client, not a
+  live one. `cli/tests/test_cli_integration_live.py` narrows this with a
+  cassette-backed run of the real orchestrator, but — unlike the
+  `tests/fixtures/` validation matrix above — its committed cassette
+  (`cli/tests/cassettes/integration.json`) is still hand-authored
+  placeholder data, not yet recorded against a real Foundry call; that's
+  a separate, still-open gap from the fixture matrix's live-run history.
+  The CLI itself has, independently, been run for real by an actual user
+  against a real Microsoft Foundry resource and real repositories many
+  times over (that's what produced the five-round fixture history above)
+  — see `DESIGN.md` Section G's "Honest limitations" for the first such
+  run.
 
 ## Contributing
 

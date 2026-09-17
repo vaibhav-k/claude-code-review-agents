@@ -210,6 +210,7 @@ def compute_checkout_total(order):
         return order.total * 0.80
     return order.total
 
+
 def compute_invoice_total(order):
     # copy-pasted from compute_checkout_total when invoicing was added
     if order.customer.is_vip and order.total > 500:
@@ -441,9 +442,12 @@ def compute_discount(order):
         return order.total * 0.20
     return order.total * 0.05
 
+
 # test_discounts.py (same diff)
 def test_vip_discount_over_500():
     assert compute_discount(make_order(vip=True, total=600)) == 120
+
+
 def test_non_vip_discount():
     assert compute_discount(make_order(vip=False, total=600)) == 30
 ```
@@ -681,12 +685,13 @@ cli/src/agent_review/discovery.py       # test-runner auto-discovery via marker 
 cli/src/agent_review/prompts.py         # .agent-rules/ -> .claude/ -> bundled default_rules/ lookup
 cli/src/agent_review/layout.py          # shared target-repo layout constants (init.py + prompts.py)
 cli/src/agent_review/findings.py        # output-contract parser/sorter (shared with the orchestrator)
+cli/src/agent_review/suppressions.py    # optional .claude/ignore-findings.yml false-positive suppression
 cli/src/agent_review/agents_client.py   # Reviewer protocol + real AnthropicFoundryReviewer (Azure only)
 cli/src/agent_review/commit.py          # staged-diff commit message generator (no co-author trailer)
 cli/src/agent_review/healing.py         # guarded self-healing: propose a patch, apply only if --apply
 cli/src/agent_review/init.py            # agent-init: scaffolds .agent-rules/, .agent-cache/, DESIGN.md
 cli/src/agent_review/default_rules/     # bundled snapshot of CLAUDE.md + the 7 specialist prompts
-cli/tests/                              # 114 pytest tests, including full CLI-entry-point integration tests
+cli/tests/                              # 157 pytest tests, including full CLI-entry-point integration tests
 ```
 
 ### Local caching (requirement 1: cache isolation + incremental analysis)
@@ -828,15 +833,21 @@ bugs were found and fixed this way rather than assumed away:
   resource** (2026-09-09, `claude-haiku-4-5`, run by the CLI's own user
   against a real repo) — no longer a theoretical gap. The build/test
   environment itself still has no Foundry resource or credential
-  configured, so every automated test still exercises orchestration logic
+  configured, so most automated tests still exercise orchestration logic
   (routing, caching, git diffing, patch application) against a
   hand-written `FakeReviewer`/`ScriptedReviewer` rather than the network;
   `cli/tests/test_agents_client.py` still only covers
   `AnthropicFoundryReviewer`'s constructor-time validation and its error
-  handling, not a real `messages.create()` call. But the real client has
-  now been exercised for real, by an actual user, against an actual
-  resource, and returned a real (clean) review -- getting there also
-  surfaced and fixed several real config/UX gaps along the way: a
+  handling, not a real `messages.create()` call. As of 0.8.0,
+  `cli/tests/test_cli_integration_live.py` narrows this gap one step
+  further: it exercises the real orchestrator against a response shape
+  captured from (or replayable without) a live Foundry call, via a
+  record/replay cassette (`cli/tests/cassettes/integration.json`,
+  `AGENT_REVIEW_RECORD_LIVE=1` to refresh against real credentials) —
+  see "CI/CD validation harness and cassette testing" below. But the real
+  client has now been exercised for real, by an actual user, against an
+  actual resource, and returned a real (clean) review -- getting there
+  also surfaced and fixed several real config/UX gaps along the way: a
   `.env`-loading bug, unstripped whitespace in the resource/key, an
   opaque connection error when `ANTHROPIC_FOUNDRY_RESOURCE` held a model
   deployment name instead of the resource name, and the
@@ -852,3 +863,610 @@ bugs were found and fixed this way rather than assumed away:
   (`discovery.py`), not a guarantee the detected command is installed or
   correctly configured for a given repo; `agent-review heal` reports a
   missing/failing runner clearly rather than guessing further.
+
+### CI/CD validation harness and cassette testing
+
+Two testing gaps closed in 0.8.0, both built around the same idea: a
+`Reviewer` (see `agents_client.Reviewer`) that replays a previously
+recorded response by default -- deterministic, free, no secrets needed --
+and switches to a real Foundry call only when explicitly asked to
+re-record.
+
+- **The `.claude/agents/*.md` prompts now have automated regression
+  coverage.** `scripts/validate_fixtures.py` runs every case in
+  `tests/fixtures/manifest.json` through its target agent, reusing the
+  standalone CLI's own `prompts`/`agents_client`/`findings` machinery to
+  invoke each agent's body as a system prompt with the fixture's diff
+  embedded in the user message (the same shape `orchestrator.py` already
+  sends) -- the same precedent named above under "Why a direct API client."
+  `.github/workflows/validate-agents.yml` runs it in replay mode
+  (`tests/fixtures/cassettes.json`) on every PR touching an agent file,
+  `CLAUDE.md`, or a fixture, and a cassette miss is a hard CI failure, not
+  a silent skip. A `workflow_dispatch` input (`live: true`) runs the same
+  harness against a real Foundry resource and uploads the refreshed
+  cassette as a build artifact for a maintainer to review and commit --
+  deliberately not auto-committed. Entries are keyed by a SHA-256 hash of
+  the exact `(system_prompt, user_message)` pair, not a human-assigned
+  name, specifically so a prompt or fixture change can never be silently
+  satisfied by a stale recording (see `cli/tests/support/cassette.py`'s
+  module docstring). The committed cassette was seeded with placeholder
+  responses derived from each fixture's own `EXPECTED.md` (this sandbox
+  has no Foundry credentials) -- clearly labeled as such in the cassette's
+  `_meta` field and in `CassetteMissError`'s own message; it must be
+  refreshed against a live resource (`--live`, or the `validate-live`
+  workflow) before it's trusted for real regression detection, not just
+  schema/wiring correctness.
+- **`cli/`'s own orchestrator now has an opt-in live/replay integration
+  test**, alongside the pre-existing fully-scripted
+  `test_cli_integration.py`. `test_cli_integration_live.py` runs the real
+  `orchestrator.run_review()` (routing, caching, git diffing, parsing --
+  everything except the network call) against a cassette-backed reviewer,
+  covering a SQL-injection true positive and a parameterized-query true
+  negative that both route to `security-review` + `performance-review` in
+  this repo's real routing rules, plus a same-content second run to prove
+  `.agent-cache/` produces an identical result with zero further reviewer
+  calls. Its cassette (`cli/tests/cassettes/integration.json`) is likewise
+  placeholder-seeded pending a real `AGENT_REVIEW_RECORD_LIVE=1` run.
+- **A real, previously unnoticed bug surfaced by building this**:
+  `git_utils.diff_for_file`'s untracked-file branch (used for any
+  brand-new file) passed the file's *absolute* path to `git diff
+  --no-index`, which git then wrote verbatim into the diff's `a/... b/...`
+  header -- leaking the reviewing machine's local checkout location into
+  the text sent to the model, inconsistent with every other diff in this
+  module (all relative to the repo), and impossible to hash reproducibly
+  across machines for a cassette-based test. Fixed to pass the relative
+  path (git already has the right working directory via `-C`); regression
+  test in `cli/tests/test_git_utils.py`
+  (`test_diff_for_file_untracked_uses_relative_path_not_absolute`).
+
+### First real `--live` run against `tests/fixtures/` (2026-09-17): what it actually found
+
+The placeholder cassette above was, by construction, seeded FROM each
+fixture's own `EXPECTED.md` — every replay run through 0.9.0 was checking
+that the harness's wiring was correct, not that the agents' real judgment
+matched their fixtures. The first real `python scripts/validate_fixtures.py
+--live` run against a real Foundry resource (run by this CLI's own user)
+closed that gap for real, and it was not a clean pass: 13/23 cases. This is
+exactly the kind of evidence this project's own `CLAUDE.md` asks its
+agents to require of *findings* — a specific, reproducible input and a
+concrete wrong output — applied here to the agents' own prompts. Every one
+of the 10 failures was read in full (not just the truncated terminal
+output) against its fixture's source and `EXPECTED.md` before any prompt
+was touched; three distinct root causes, and three different classes of
+fix:
+
+1. **Output-contract non-compliance, independent of judgment.** Several
+   `must_not_fire` cases got the right verdict wrapped in a markdown code
+   fence, sometimes with an explanatory sentence appended after it (e.g.
+   security-review's false-positive trap: `` ```\nNo high-impact issues
+   found.\n```\n\nThe diff uses parameterized query execution...` ``).
+   `CLAUDE.md`'s Output Contract already said not to do this in words; it
+   didn't survive contact with a real model. Fixed by making the contract
+   more explicit and adding a concrete right/wrong example directly in
+   `CLAUDE.md` (fences and trailing commentary are a violation regardless
+   of whether the verdict itself was correct) — this is a global fix, not
+   per-agent, since the failure mode recurred across unrelated agents.
+2. **Evidence-bar misapplication on a hard case, where the exclusion rule
+   already existed in writing.** security-review flagged an f-string SQL
+   query built from a value it explicitly identified as a module-level
+   constant, reasoning about what *would* happen "if status were ever
+   parameterized" — precisely the theoretical-future-misuse argument its
+   own prompt already excludes. data-integrity-review flagged a column
+   *widening* migration and a brand-new `CREATE TABLE` as backfill/data-loss
+   risks, missing that neither can lose a single existing row (only
+   narrowing/adding-constraints-to-existing-rows can). concurrency-
+   resource-review flagged a class's own resource field as a leak despite
+   the class implementing `AutoCloseable` and exposing `close()` — a
+   legitimate delegated-ownership pattern its prompt didn't call out.
+   performance-review flagged a loop explicitly commented as iterating a
+   fixed 3 items, and a memoizing cache over what's plausibly a small
+   fixed key space, as unbounded/N+1. api-type-contract-review flagged a
+   same-file TypeScript signature break its own Evidence requirements
+   already say is lower-value ("prefer findings the type checker will NOT
+   catch") as CRITICAL. In every one of these five cases the general rule
+   the model needed already existed in that agent's prompt — what was
+   missing was a concrete counter-example anchoring it to this exact
+   shape. Fixed by adding one to each of security-review.md,
+   data-integrity-review.md, concurrency-resource-review.md,
+   performance-review.md, and api-type-contract-review.md's own Explicit
+   exclusions, using close variants of the actual failing inputs.
+3. **A structural mismatch between how these prompts are written and how
+   this CLI actually invokes them.** testing-coverage-review's true_positive
+   case — a brand-new function with two calculation branches and zero test
+   file in the diff, about as unambiguous a coverage gap as this fixture
+   matrix contains — got `No high-impact issues found.`, a real false
+   negative. Its own prompt's Context Acquisition says to "confirm by
+   reading the test diff... do not assume absence without checking," and
+   its YAML frontmatter grants `Read`/`Grep`/`Bash` tools — both written
+   for a live Claude Code session. `agents_client.Reviewer.complete()`
+   sends that same prompt body as a single text completion with none of
+   those tools actually available, and a model taking the instruction to
+   "check" seriously, with no way to check, has a defensible-sounding
+   reason to withhold the finding rather than assume the gap is real. Fixed
+   at the orchestrator level, not by rewriting every agent's Context
+   Acquisition section (which stays correct for the live Claude Code case
+   this system also serves): `orchestrator.build_review_user_message()`
+   (shared by `orchestrator.py` and `scripts/validate_fixtures.py` so they
+   can never drift apart on this) now appends a short note after the diff
+   telling the model plainly that it has no tool access here, the diff
+   shown is its complete evidence, and an instruction above to "check" or
+   "Grep for" something is not a reason to withhold an otherwise-supported
+   finding. The same run also surfaced a second, narrower issue in this
+   family: testing-coverage-review's own false-positive-trap fixture
+   called an undefined `make_order()` helper with no import anywhere in
+   the diff, making "this test can't run" a defensible finding under a
+   strict reading even though the fixture's intent was "both branches are
+   exercised with a real assertion." Fixed two ways: the fixture itself
+   now imports `compute_discount` and defines `make_order()`, removing the
+   ambiguity, and testing-coverage-review.md gained an explicit exclusion
+   ("assume a referenced helper/fixture exists elsewhere unless the diff
+   itself proves otherwise; import/syntax validity is not this agent's
+   job").
+
+None of this is fixed with certainty the way a unit test failure is —
+these are prompt/model-behavior changes, verified against real inputs but
+inherently probabilistic, not a code diff with a deterministic pass/fail.
+`tests/fixtures/cassettes.json` (the user's real recording that exposed
+all of this) is now entirely stale, since the prompts and message shape it
+was keyed against both changed; it's been re-seeded with fresh
+`EXPECTED.md`-derived placeholders (same bootstrap convention as before
+the first live run) so replay CI stays meaningful in the interim, but a
+fresh `--live` run is what actually confirms whether these fixes worked
+and is the natural next step, not merely a nice-to-have.
+
+### Second real `--live` run (2026-09-17): 16/23, and what changed
+
+A second live run, after 0.9.1's fixes, scored 16/23 (up from 13/23) and
+recorded 43 cassette entries. Both round-1 root causes that were fully
+architectural — the code-fence output-contract violation and
+testing-coverage-review's `make_order()` false negative — were completely
+resolved; neither recurred in any form. The remaining 7 failures split
+into three groups, read in full against their fixture source (not just the
+terminal's truncated summary) before touching anything, per this project's
+own evidence-bar discipline:
+
+1. **Three repeats where the round-1 counter-example didn't take.**
+   `data-integrity-review/boundary_case` (a brand-new `StagingImports`
+   table with `varchar(50)` and no `NOT NULL`) still fired, but reframed:
+   instead of the backfill/narrowing argument the 0.9.1 fix addressed, the
+   model now argued forward — a *future* insert might overflow the column,
+   and *downstream* code might assume a constraint that isn't there. Same
+   underlying error (judging a brand-new, empty table by hypothetical data
+   never shown in the diff), different angle the existing exclusion didn't
+   cover. `concurrency-resource-review/boundary_case` (`ReportSession`,
+   `AutoCloseable`, connection in a field initializer) still fired too,
+   now arguing "what if `pool.getConnection()` itself throws before
+   `close()` can ever run" — which doesn't hold up (if the acquisition
+   call throws, nothing was acquired, so there is nothing to leak) but the
+   0.9.1 exclusion never addressed that specific, logically-unsound shape.
+   `api-type-contract-review/boundary_case` (`formatPrice`'s arg-count
+   change, a same-diff `.ts` caller not updated) still fired CRITICAL even
+   though the model's own reasoning explicitly acknowledged it as a
+   compile-time-catchable break — the 0.9.1 exclusion existed but likely
+   lost out to the Strict-scope bullet describing the identical shape
+   earlier in the same prompt with no cross-reference to the carve-out.
+   Fix for all three: added a concrete rebuttal anchored to the exact
+   failing shape (no-op-on-failed-acquisition and parent/child resource
+   closure for concurrency-resource-review; forward/downstream speculation
+   for data-integrity-review; an explicit "this exclusion controls even
+   though the Strict-scope bullet above describes this shape" cross-
+   reference for api-type-contract-review), rather than restating the same
+   abstract rule more verbosely a second time.
+
+2. **A backfire from round 1's own added example.** `performance-review`'s
+   0.9.1 fix for the `config.py` cache-fill boundary case explicitly
+   *illustrated* a bad case ("attacker/request-controlled — a user ID, a
+   free-text query, a tenant ID with no ceiling") to contrast against the
+   good one. In the live run, the model's own stated reasoning quoted that
+   exact vocabulary back — "if `key` is... a user ID... tenant ID... without
+   evidence it's truly fixed and small, assume it is attacker-
+   controllable" — and flagged it anyway, inverting the instruction's
+   actual conclusion. `config.py`'s `key` parameter shows no such evidence
+   either way; the model appears to have pattern-matched on the salient
+   keywords in the illustrative bad example rather than checking whether
+   the code in front of it actually exhibited them. Fix: reworded the
+   exclusion to drop the bad-case example vocabulary entirely and instead
+   require positive evidence of an unbounded key space from the diff
+   itself, with an explicit "if the diff gives no indication either way,
+   do not report it" resolution. Concrete lesson for future prompt edits
+   on this project: an illustrative "here's what WOULD be bad" example
+   inside an exclusion rule can get misapplied by surface-keyword match
+   rather than by the logical condition it's embedded in — prefer stating
+   the positive evidence requirement plainly over naming bad-case
+   examples.
+
+3. **Two failures left alone pending more evidence.**
+   `data-integrity-review/true_positive_structural` (billing.py's
+   duplicated VIP-discount logic, previously a reliable pass) missed
+   entirely this run, and `reliability-availability-review/false_positive_trap`
+   (rates.ts's capped-retry-with-backoff) newly over-triggered, on an agent
+   whose prompt was never touched in any round. Neither is explained by
+   anything edited in round 1: the first is an unrelated bullet in the same
+   file as the (correctly targeted) migrations fix, and the second's agent
+   prompt is untouched entirely. Two plausible explanations, not
+   distinguished with n=1: ordinary run-to-run model variance, or a side
+   effect of round 1's `_NO_TOOL_ACCESS_NOTE` addition ("don't withhold an
+   otherwise-supported finding merely because you can't run a command")
+   nudging the model toward being more trigger-happy in general, not just
+   on the testing-coverage-review case it targeted. No prompt change was
+   made for either case this round — editing a prompt on a single
+   contradictory data point risks the same kind of collateral regression
+   round 1 just produced elsewhere. Recommendation for whoever runs the
+   next `--live` pass: if either of these reproduces, that's real signal;
+   if not, this round's data point was noise.
+
+Methodological note carried forward: single-shot `--live` runs are a
+noisy signal for judging whether a prompt fix worked, precisely because
+the thing being tested (an LLM's judgment on a boundary case) is
+stochastic. Three of `cassettes.json`'s cases have now needed corrective
+prompt edits after two separate specific counter-examples apiece across
+two rounds without landing on the first try. A more statistically sound
+process going forward would run 2-3 live samples per case and look at the
+majority verdict rather than pass/fail on one call — noted here rather
+than implemented, since it changes `validate_fixtures.py --live`'s cost
+and would need the user's buy-in before making every `--live` run several
+times more expensive.
+
+`tests/fixtures/cassettes.json` is stale again for the four agents
+touched this round (data-integrity-review, concurrency-resource-review,
+performance-review, api-type-contract-review) and has been re-seeded with
+`EXPECTED.md`-derived placeholders for exactly those 13 affected cases (23/23
+pass on the placeholder-seeded cassette, confirming harness wiring only —
+not model judgment). A third `--live` run is what actually confirms
+whether round 2's fixes worked.
+
+### Third real `--live` run (2026-09-17): the same 7 cases failed again
+
+A third live run scored the same 16/23 as round 2 — and, case for case,
+the identical 7 failures. This is a materially different signal than
+round 2's: every one of round 2's four targeted fixes (data-integrity-
+review, concurrency-resource-review, performance-review, api-type-
+contract-review boundary cases) failed to change the model's verdict on a
+second attempt, and both cases round 2 deliberately left untouched for
+lack of evidence (data-integrity-review's `true_positive_structural` miss,
+reliability-availability-review's `false_positive_trap` over-trigger) now
+have n=2 identical repeats — no longer distinguishable from noise. Read
+each in full again rather than assuming round 2's diagnosis still applied:
+
+1. **Two rounds of textual counter-examples, same four cases, same
+   outcome — but the model's *specific* argument moved each time**,
+   which matters: it means the fixes were closing the exact door they
+   targeted, and the model was finding a different door, not ignoring the
+   instruction outright.
+   - `data-integrity-review/boundary_case`: round 2 closed off "a future
+     insert might overflow this column"; round 3's response reframed the
+     identical concern as a present-tense design defect ("varchar(50) is
+     objectively too narrow for common real email addresses") — same
+     underlying argument, phrased to avoid the specific "future" framing
+     that had just been excluded. Fix: stopped rebutting *framings* and
+     instead moved the whole carve-out to Explicit exclusions as a
+     categorical rule — a brand-new table's column width/constraint is
+     out of scope "no matter how you frame the argument," explicitly
+     including comparison to an external standard (RFC 5321, typical name
+     lengths) as still not evidence about this diff.
+   - `concurrency-resource-review/boundary_case`: round 2 closed off "what
+     if the acquisition call itself throws"; round 3 shifted one step
+     later — "what if some exception occurs after the field initializer
+     succeeds but before construction completes." For `ReportSession`
+     specifically (one field, no other constructor code), that window
+     doesn't exist — there is no statement in the diff that could throw in
+     that gap. Fix: added the rebuttal that a single-field class has no
+     third code path, and instructed the agent not to invent additional
+     initializer/constructor code the diff doesn't show just to create
+     the window the argument needs.
+   - `performance-review/boundary_case`: round 2 replaced "attacker/
+     tenant ID" example vocabulary with a plain evidence requirement;
+     round 3 still asserted the key was "an attacker or caller passing
+     free-form user" input, with nothing in the 6-line diff supporting it.
+     The diff has no caller at all — `get_config` is never invoked in what
+     's shown. Fix: made that literal — no caller in the diff means the
+     Evidence Bar's "path exists"/"trigger is plausible" clauses cannot be
+     met by definition, so the model may not reach outside the diff for a
+     plausible-sounding caller to complete its own argument.
+   - `api-type-contract-review/boundary_case`: two rounds of prose
+     (including an explicit "this exclusion controls over the Strict-scope
+     bullet" cross-reference) left the verdict unchanged in substance
+     (severity did drop CRITICAL → HIGH the second time, suggesting *some*
+     signal was getting through). Round 1's CLAUDE.md fix for the
+     code-fence violation — a concrete WRONG/RIGHT worked example, not
+     more descriptive prose — is the one technique in this whole exercise
+     with a confirmed track record, so round 3 applies it here for the
+     first time: a literal WRONG (the exact `formatPrice`/`checkout.ts`
+     finding text) paired with the RIGHT response and a one-line reason,
+     mirroring CLAUDE.md's own Output Contract section.
+
+2. **Two "leave it alone" cases from round 2, now confirmed real on a
+   second sample.** `reliability-availability-review/false_positive_trap`
+   (rates.ts) repeated its over-trigger with a related but re-worded
+   complaint both times ("swallows exceptions without distinguishing
+   retriable from permanent," then "does not validate whether exception is
+   retryable before retrying") — a real gap in this agent's prompt (never
+   edited before this round): nothing in its Strict scope or exclusions
+   addresses "retries without classifying the error first" as long as the
+   retry is otherwise capped, backed off, and propagates on exhaustion.
+   Added that exclusion for the first time. `data-integrity-review/
+   true_positive_structural` (billing.py's duplicated VIP-discount rule)
+   missed a second time with no visible reasoning to diagnose (a bare
+   `must_fire` miss produces no output to read, unlike an over-trigger).
+   Best available lever: the adjacent Migrations/schema bullet had grown
+   substantially across two rounds of edits into the single longest bullet
+   in the Strict scope list — moved its widening/brand-new-table carve-outs
+   out to Explicit exclusions (a more natural home for them regardless)
+   and shrank the Strict-scope bullet back to its original length, on the
+   hypothesis that bullet's growing length was crowding attention away
+   from its neighbor. This is a hypothesis, not a confirmed diagnosis —
+   there's no way to inspect the model's reasoning on a silent miss to
+   verify it.
+
+3. **`testing-coverage-review/false_positive_trap` — not a prompt bug at
+   all.** Read fully for the first time this round: the fixture's diff
+   adds both `pricing.py` (a brand-new `compute_discount` with a
+   `total > 500` boundary) and `test_discounts.py` (tests at `total=600`
+   for both VIP and non-VIP branches — comfortably over the boundary, never
+   at it). `testing-coverage-review.md`'s own Strict scope explicitly lists
+   "Untested new boundary conditions: ... the test diff exercises the
+   interior case but not the boundary itself" as in-scope. The model's
+   finding — the exact `total == 500` boundary is untested — is a correct
+   application of the agent's own documented scope, not a false positive
+   the prompt needs to suppress. `EXPECTED.md`'s "no finding" verdict
+   predates that scope bullet's precise wording and the fixture's own test
+   file genuinely has the gap the agent is designed to catch. Fixed the
+   fixture, not the prompt: added `test_vip_discount_at_boundary_not_over_500`
+   (`total=500`, expects the non-VIP 5% rate) to `test_discounts.py`,
+   closing the actual gap so the fixture is a genuinely complete "no
+   finding" case rather than asking the agent to stay silent about a real
+   one. This is the same category of fix as round 1's `make_order()` fix:
+   when a live run and a fixture disagree, read both before assuming the
+   model is wrong.
+
+`tests/fixtures/cassettes.json` is stale again for all five agents touched
+this round (the four repeats plus reliability-availability-review) and for
+testing-coverage-review's `false_positive_trap` case (fixture content
+changed, so its diff and request-key hash changed regardless of the
+prompt) — 17 cases re-seeded with placeholders, 23/23 on the harness wiring
+check. A fourth `--live` run is what actually confirms whether any of this
+round's fixes moved the needle, particularly the four repeat cases: two
+rounds of prompt edits changing zero verdicts is a real pattern, and if a
+third, more structural attempt (categorical rules, an evidence-bar gate
+tied to "no caller in the diff," a worked example) doesn't move them
+either, the more honest conclusion may be that these four specific
+boundary cases are at or past the practical ceiling of single-shot prompt
+engineering against this model, and worth a different strategy (e.g.
+majority-vote over several live samples, or accepting them as a documented,
+known-probabilistic soft spot rather than a hard CI gate) rather than a
+fourth round of the same technique.
+
+### Fourth real `--live` run (2026-09-17): fixtures were part of the problem
+
+A fourth live run produced the predicted fourth round of the same four
+repeat cases, plus one brand-new regression — but with a different
+character than rounds 2–3 that changed the diagnosis:
+
+1. **`data-integrity-review/boundary_case`, 4th identical failure.**
+   Despite round 3's categorical, framing-independent exclusion (explicitly
+   naming "comparison to an external standard" as non-evidence), the model
+   argued the exact thing that exclusion named: "Email column width
+   insufficient for valid email addresses... will be silently truncated."
+   Four straight rounds asserting the same conclusion through four
+   different framings, against increasingly explicit and specific
+   instructions, is strong evidence the *fixture's specific choice* — a
+   named `Email` column at `varchar(50)` — is triggering an extremely
+   well-known, deeply trained "this is a canonical schema anti-pattern"
+   prior that no amount of in-context instruction was overriding. This
+   mirrors round 3's realization about `testing-coverage-review`: when a
+   live run and a fixture disagree for this long, check whether the
+   fixture itself is asking something unreasonable of the model, not just
+   whether the prompt needs more words. Fix: changed the fixture's column
+   from `Email varchar(50)` to `BatchLabel varchar(20)` — same principle
+   (brand-new table, narrow column, no write in the diff), no column name
+   with a famous, widely-known "correct" minimum length for the model to
+   recognize and override instructions for. Also added a WRONG/RIGHT
+   worked example to the prompt (the technique with the best track record
+   in this project) as defense in depth.
+
+2. **`concurrency-resource-review/boundary_case`, 4th failure, new and
+   more defensible argument.** Round 4's finding — "every call to `run()`
+   creates a Statement that is never closed, accumulating open database
+   cursors" — is different from rounds 2–3's increasingly strained
+   arguments (failed acquisition, partial construction): this one is
+   actually correct and grounded in the diff. `ReportSession.run()`
+   really does call `conn.createStatement().executeQuery(sql)` and drops
+   the `Statement` reference without ever closing it, and nothing else in
+   the class (not `run()`, not `close()`, not the caller) has a reference
+   to close it later — a real, unrebuttable gap, and this project's own
+   evidence bar says a defensible finding should not be suppressed. The
+   round-2 exclusion claiming "closing the parent closes the child too
+   (JDBC guarantees this)" was also simply wrong as a blanket claim — that
+   behavior is driver- and pool-dependent, not a JDBC spec guarantee, and
+   for a pooled connection `close()` may just return it to the pool
+   without closing anything. Fix: this is a fixture bug, not a model
+   error. Changed `ReportSession.run()` to call
+   `stmt.closeOnCompletion()` (JDBC 4.1+) so the `Statement` genuinely
+   does close once its `ResultSet` is closed/exhausted, closing the real
+   gap while keeping the class to exactly one field — preserving the
+   "no third code path for a one-field class" argument from round 3
+   instead of reopening it (an earlier attempt at this fix added a second
+   `List<Statement>` field to track and close manually, which would have
+   given the model's "partial construction" argument a second field
+   initializer to point at — reverted before committing). Corrected the
+   prompt's overstated JDBC claim to the accurate, hedged version, and
+   added a matching WRONG/RIGHT worked example.
+
+3. **`performance-review`: the boundary case failed a 4th time, AND its
+   false-positive-trap case failed for the first time ever** (`leaderboard.py`,
+   a fixed 3-item loop that had passed cleanly in every prior round). A
+   previously-rock-solid case newly failing, on the same agent whose one
+   bullet had been rewritten three rounds running and had grown into the
+   longest bullet in the entire agent set, is a strong signal that the
+   bullet's own length/salience was distorting the model's calibration on
+   *other*, unrelated bullets in the same prompt — the same mechanism
+   suspected (but never confirmed) for `data-integrity-review`'s
+   `true_positive_structural` miss two rounds ago. Fix, two parts: (a)
+   trimmed the "Unbounded resource growth" bullet back to one sentence in
+   Strict scope and moved all the accumulated exclusion detail into
+   Explicit exclusions — shorter overall, nothing substantive dropped; (b)
+   for the boundary case itself, applied the SAME fixture-anchoring
+   technique that has reliably worked for `leaderboard.py` from round 1
+   onward: added a comment to `config.py` stating `key` is one of ~20
+   fixed, developer-controlled setting names, never populated from request
+   input — giving the model concrete textual evidence to hang a "no
+   finding" verdict on, exactly like `leaderboard.py`'s "always exactly
+   the 3 leaderboard positions" comment, rather than asking it to infer
+   boundedness from a 4-line snippet with zero anchoring context.
+
+4. **`testing-coverage-review/false_positive_trap`: round 3's fixture fix
+   worked, but exposed a narrower prompt gap.** The model no longer
+   complained about the `total == 500` boundary (round 3's fix held) but
+   found a new, related complaint: "boundary tested at the exact threshold
+   but not below it." This doesn't identify a materially different code
+   path — `total=499` and `total=500` both take the same (non-VIP) branch
+   of the `> 500` comparison, so a value below the boundary adds no
+   discriminating power once the boundary value itself is tested. Unlike
+   case 1, this genuinely is a prompt gap: nothing in
+   `testing-coverage-review.md` said a boundary-adjacent value is
+   redundant once the exact boundary is covered. Added that exclusion.
+
+`tests/fixtures/cassettes.json` re-seeded (14 new placeholder entries) for
+the agents and fixtures touched this round; 23/23 on the harness wiring
+check. A fifth `--live` run is the real test — particularly of whether
+`data-integrity-review/boundary_case` and `concurrency-resource-review/
+boundary_case` finally hold now that the underlying fixtures no longer
+ask the model to stay silent about the exact kind of finding it has the
+strongest trained priors toward reporting.
+
+### Structured output, budget management, and the feedback loop (implemented in 0.9.0)
+
+Three further production-readiness gaps were identified alongside the CI
+harness and cassette testing above, and deliberately left unimplemented in
+0.8.0 so that work could get the same TDD-first, evidence-based treatment
+rather than being rushed in alongside it. All three landed in 0.9.0 (see
+`CHANGELOG.md`); this section is kept as the original design rationale —
+ordered by the priority that was used to decide implementation order, not
+as a forward-looking roadmap anymore. Each subsection below still
+describes the problem and the design as originally reasoned through, with
+a closing note on what actually shipped and where to find it.
+
+**1. Structured output & parsing guards.** Every consumer of a finding —
+`findings.parse()`, `scripts/validate_fixtures.py`'s verdict checks, a
+future CI gate that fails a PR on a CRITICAL finding — depends on a
+specialist's raw text matching `_HEADER_RE` exactly. This is the highest
+priority of the three because it's the only one of the three that's
+already a live, silent failure mode: a model response that drifts even
+slightly from the `[SEVERITY] file:line — Title` contract (extra
+markdown, a rewrapped line, a stray code fence) doesn't error, it just
+silently parses to zero findings — indistinguishable from a genuinely
+clean review, in the one place (a CI gate) where that distinction matters
+most. The fix doesn't require abandoning the human-readable contract
+`CLAUDE.md` already defines: request a second, structured form alongside
+it via Claude's native tool-use (a `report_findings` tool with a JSON
+schema — `severity` enum, `file`, `line`, `title`, `impact`, `fix` —
+mirrors this project's own `ReportFindings` tool shape), and have
+`findings.parse()` prefer the structured block when present, falling back
+to today's regex parse otherwise so a partial rollout (some agents
+migrated, some not) never breaks. `agents_client.Reviewer.complete()`'s
+signature would need to grow an optional structured-response path (a new
+`complete_structured()` method, or a `Reviewer` capability flag) rather
+than changing its existing contract, so `FakeReviewer`/`CassetteReviewer`
+keep working unchanged for agents that haven't migrated. Land this before
+#4 or #5: both of those add more moving parts on top of the *current*
+parsing path, and are easier to build once findings are a real data
+structure at the API boundary rather than an artifact of regex-matching
+model prose.
+
+*Shipped in 0.9.0, narrower than sketched above.* The tool-use /
+`report_findings`-schema half of this design was deliberately **not**
+built: it would change `agents_client.Reviewer.complete()`'s live
+model-calling contract, and this build environment still has no way to
+verify a structured-response path against a real Foundry call (see
+Section G's "Honest limitations") — landing it unverified would violate
+this project's own evidence-based, TDD-first standard. What did ship is
+the fully unit-testable half of the same problem:
+`findings.is_malformed_response()` distinguishes a genuine clean review
+from a response that silently drifted off the text contract (surfaced via
+`FileReviewResult.malformed_agents`, never cached as complete — see
+`orchestrator._review_one_file`), and a `--json` flag on `agent-review
+review` gives CI a structured form of today's findings without waiting on
+a model-side schema change. The tool-use path above remains a real
+follow-up once a live-verified Foundry test run is available to build it
+against.
+
+**2. Dynamic token and context budget management.** Real production
+repositories will eventually produce a diff (a large refactor, a
+generated-file commit, a vendored dependency bump) that either burns
+inference budget on content nobody wants reviewed or exceeds a model's
+context window mid-run — today `run_review()` has no ceiling at all on
+per-file diff size or total files-per-run, and no exclusion list for the
+generated/vendored/lockfile case the routing layer was never designed to
+recognize. This ranks below structured output because it's a scaling
+failure, not a silent-correctness failure: today it manifests as a slow
+or failed run on an unusually large diff, which is visible and
+debuggable, not a quietly wrong "clean" review. Concrete shape: (a) a
+`should_exclude_file(path)` predicate in `routing.py` keyed off a small,
+extensible set of path patterns (`*.lock`, `*.min.js`, `package-lock.json`,
+common vendored-directory names) applied before routing, not after, so
+excluded files cost zero inference budget, not just zero output; (b) a
+per-file diff-size ceiling in `orchestrator._review_one_file` — a diff
+over some configurable threshold (e.g. 4000 lines) gets truncated with a
+clear `[... diff truncated, N lines omitted ...]` marker inserted at the
+cut point, sent to the model with that caveat explicit rather than
+silently dropped, and the file's result flagged (a new
+`FileReviewResult.truncated: bool`) so CLI output surfaces "reviewed
+under truncation" rather than implying full coverage; (c) a `--max-files`
+/ total-diff-budget flag in `cli.py` for the pathological wide-diff case,
+reusing `routing.py`'s already-deterministic, zero-cost routing to decide
+which files are dropped first (lowest-risk-domain files, not an arbitrary
+truncation) when a run is over budget.
+
+*Shipped in 0.9.0, as designed.* `routing.is_excluded_from_review()` (a),
+`orchestrator._truncate_diff()` plus `FileReviewResult.truncated` (b), and
+`--max-files` plus `ReviewRun.skipped_for_budget` (c) all landed
+unchanged from this design. The one refinement made during
+implementation: (c) prioritizes by `len(RoutingDecision.agents)` rather
+than a named "lowest-risk-domain" ranking — the number of specialists a
+file already tripped is a more direct, zero-cost proxy for its risk
+surface than trying to rank *which* domains matter more in the abstract.
+
+**3. Feedback loop & false-positive suppression.** Lowest priority of the
+three not because it matters least long-term — false-positive fatigue is
+exactly what erodes trust in an automated reviewer over months of real
+use — but because it's the only one of the three with no correctness or
+scaling risk today; its cost is UX friction (rerunning past a finding a
+team has already triaged as a non-issue), which compounds slowly rather
+than failing sharply. Design: a `.claude/ignore-findings.yml` (mirroring
+`.gitignore`'s discoverability) at the target repo root, holding entries
+keyed by `(agent, location_pattern, reason)` — a glob or regex against
+`Finding.location` rather than an exact line number, since line numbers
+drift with every unrelated edit to the file and an exact-line suppression
+would silently stop matching (and thus silently stop suppressing) on the
+very next commit. `orchestrator.run_review()` would load this file once
+per run and filter `FileReviewResult.findings` against it after parsing
+(never before — the raw finding is still what gets cached, so a later
+change to the suppression file doesn't require re-reviewing already-cached
+files), with a summary line ("3 findings suppressed by
+.claude/ignore-findings.yml") in CLI output so suppression is visible, not
+silent. A lighter-weight complement worth building alongside it:
+`agent-review` logging every suppressed finding's `(agent, location,
+reason, timestamp)` to a local, gitignored log
+(`.agent-cache/suppressions.log`), giving a maintainer auditing prompt
+quality over time a concrete, evidence-based list of exactly what a given
+agent tends to false-positive on — the same evidence-based instinct this
+project's own `CLAUDE.md` already asks of the agents themselves, applied
+to maintaining the agents.
+
+*Shipped in 0.9.0, as designed, plus one addition.* `suppressions.py`
+implements the config format, the after-parsing/independent-of-caching
+filter in `orchestrator.run_review()`, the CLI summary line (`_print_review`
+and `--json`), and the `.agent-cache/suppressions.log` audit trail exactly
+as sketched, matched via `agent` (or `"*"` for any agent) plus an
+`fnmatch` glob against `Finding.location`. The one addition beyond the
+original design: parsing is defensive by construction (`_coerce_entry()`)
+— a hand-edited config with a missing or malformed field is silently
+skipped rather than crashing the run, mirroring `cache.py`'s own
+corrupt-manifest handling, since this file is meant to be hand-edited by
+a team and a typo must never take down every future review. This also
+introduces this project's first new runtime dependency since `anthropic`
+and `python-dotenv`: `pyyaml`, deliberately not the tiny hand-rolled
+frontmatter reader `prompts.py` uses elsewhere, because that reader only
+ever parses a fixed, tool-generated set of flat scalar fields — an
+ordinary hand-authored YAML file with lists, quoting, and comments is
+exactly the case a real parser earns its keep for.

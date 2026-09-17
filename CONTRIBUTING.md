@@ -53,6 +53,46 @@ Keep pull requests to one agent's scope change (or one new cross-cutting
 `CLAUDE.md` rule) at a time. A PR that touches three agents' scopes
 simultaneously is very hard to review for overlap — split it.
 
+## When a live `--live` run disagrees with `EXPECTED.md`
+
+This has happened repeatedly (see `DESIGN.md`'s five "real `--live` run"
+write-ups) and the same two lessons keep paying off:
+
+- **A worked example beats more descriptive prose.** When a live model's
+  response violates an existing exclusion, the fix that has reliably
+  changed its verdict is a concrete `WRONG (do not report this)` /
+  `RIGHT` pair anchored to the exact failing input — not a longer,
+  more emphatic restatement of the same abstract rule. Several rounds in
+  this project's history added increasingly specific prose to an
+  exclusion and got zero change in the live model's verdict; switching
+  that same exclusion to a worked example was often what actually worked.
+  Watch for a backfire, though: an exclusion's own illustrative "here's
+  what a BAD case would look like" vocabulary can get quoted back and
+  misapplied to code that doesn't actually exhibit it — prefer stating a
+  positive evidence requirement over naming bad-case examples.
+- **After 2+ rounds of prompt-only fixes fail to change a verdict, check
+  the fixture, not just the prompt.** More than one "stubborn" case in
+  this project's history turned out to be a fixture that tripped an
+  extremely strong, well-known trained prior (an `Email varchar(50)`
+  column, a canonical schema anti-pattern) or that had a genuine,
+  independent bug the model was correctly catching (an unclosed `Statement`
+  the fixture's author hadn't noticed). In both cases, three-plus rounds
+  of increasingly specific prompt text changed nothing, and the actual fix
+  was to change the fixture. If a live run keeps disagreeing with
+  `EXPECTED.md` on the same case after a couple of honest attempts to fix
+  the prompt, read the fixture's own source again asking "is this asking
+  the model to stay silent about something a careful reviewer really
+  would flag" before assuming the model is wrong.
+
+Also worth knowing: a bullet that grows across several rounds of
+defensive edits doesn't just risk being ignored on its own case — in this
+project's history, one heavily-edited bullet correlated with a previously
+solid, *unrelated* case in the same agent starting to fail, on the theory
+that the bullet's length/salience was distorting calibration elsewhere in
+the same prompt. If a bullet has been edited three-plus times, consider
+trimming it and moving detail into "Explicit exclusions" rather than
+extending it in place again.
+
 ## Checklist for a PR that changes an agent
 
 - [ ] Frontmatter still uses only the conservative field set (`name`,

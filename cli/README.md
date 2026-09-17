@@ -146,6 +146,12 @@ agent-review --path /path/to/some/repo
 # Same thing, explicit subcommand + explicit base ref + CI-friendly exit code.
 agent-review review --path /path/to/some/repo --base origin/main --fail-on-findings
 
+# Cap how many routed files get reviewed in one run (a pathologically wide
+# diff -- a huge rename, generated content -- skips the rest rather than
+# blowing the budget; skipped files are reported, not silently dropped,
+# and get picked up on a later run once the file set fits under the cap).
+agent-review review --path /path/to/some/repo --max-files 50
+
 # Generate a commit message for what's currently staged (no co-author trailer).
 agent-review commit --path /path/to/some/repo
 
@@ -169,6 +175,34 @@ agent-review heal --path /path/to/some/repo --apply   # writes the patch, then r
   repo first, then `.claude/agents/` (so a repo already using the
   Claude-Code-native agents works as-is), then falls back to the copies
   bundled with this package.
+- **Suppressing false positives** (`suppressions.py`) -- an optional
+  `.claude/ignore-findings.yml` in the target repo lets a team mark a
+  specialist's finding as an accepted false positive or accepted risk,
+  matched by agent name (or `"*"` for any agent) and a glob against the
+  finding's `file:line` location, not an exact line number (those drift).
+  Suppressed findings drop out of the report but are still logged to
+  `.agent-cache/suppressions.log`, and a summary line always says how
+  many were suppressed and why -- silent suppression would just trade one
+  kind of blind spot for another. Suppression is applied AFTER parsing and
+  is independent of the cache: the cache always stores the raw,
+  unsuppressed finding, so editing `ignore-findings.yml` takes effect on
+  the very next run with no cache invalidation needed.
+- **Structured-output guards** (`findings.py`) -- a specialist's response
+  is parsed against the exact `[SEVERITY] file:line` contract every agent
+  is instructed to follow; `is_malformed_response()` catches a response
+  that doesn't match it (a hedge, a code-fenced answer, stray prose) and
+  the CLI surfaces it as an explicit warning naming the file and agent,
+  rather than silently treating an unparseable response as "no finding" --
+  a parsing failure and a clean verdict are different things and the
+  output says which one happened.
+- **Diff/file budget** (`orchestrator.py`) -- a single file's diff beyond
+  `MAX_DIFF_LINES` (4000) is truncated before being sent to any specialist,
+  with the response and CLI output both saying so rather than silently
+  reviewing less than the file actually changed; a `--max-files` cap drops
+  the tail of an oversized file list before any model call is made for
+  those files, reported as `skipped_for_budget` rather than silently
+  omitted. Both exist so a huge changeset degrades predictably instead of
+  blowing past context limits or an unbounded API bill.
 - **Self-healing** (`healing.py`) is intentionally *not* autonomous:
   it runs the detected test command, and on failure asks the model for a
   diagnosis and a unified diff -- but never writes anything to disk
