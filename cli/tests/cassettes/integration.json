@@ -1,0 +1,19 @@
+{
+  "4a7896a2fd41350f906255ab1151edcf3e4fd6bdbcf201a210466e4df6f75bf0": {
+    "label": "safe_handlers.py / performance-review",
+    "response": "No high-impact issues found."
+  },
+  "770a9177c497f841ebb51a7109f81f43fa4542de2d315fcd89f313d3c7175f3c": {
+    "label": "handlers.py / security-review",
+    "response": "[HIGH] handlers.py:2 \u2014 SQL injection via f-string interpolation\nImpact: user_id flows directly into the query string, letting an attacker alter the query's structure and read or modify data outside the intended row.\nFix: use a parameterized query, e.g. db.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,)).\n"
+  },
+  "_meta": "Placeholder responses hand-authored from the fixture's expected verdicts, NOT recorded from a live Foundry call (no Foundry credentials in the environment that built this cassette). Re-seeded 2026-09-17 after orchestrator.build_review_user_message() and several agent prompts changed (a real --live run against tests/fixtures/ surfaced live-model gaps this same change targets -- see CHANGELOG.md); the request keys below reflect the new prompt/message text, but the response TEXT is still hand-authored, not live-verified. Refresh with AGENT_REVIEW_RECORD_LIVE=1 (real ANTHROPIC_FOUNDRY_* secrets required) before trusting this for real prompt-regression detection, then commit the diff.",
+  "b56cd0396fd10b11d868ca473d6b1ca6d75bdbfc9a54b99d8f4bd8fa881a70e9": {
+    "label": "handlers.py / performance-review",
+    "response": "No high-impact issues found."
+  },
+  "ce2b3d99f06716feaa0a8edf4e9cd285768b95672855611ad5730b3994d8bb0d": {
+    "label": "safe_handlers.py / security-review",
+    "response": "No high-impact issues found."
+  }
+}

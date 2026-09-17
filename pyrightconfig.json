@@ -5,7 +5,14 @@
 // runtime (pytest executes it before the import) but static analyzers
 // don't execute code, so they can't see it -- extraPaths tells Pyright
 // the same thing statically.
+//
+// cli/tests is here too, for the same reason: scripts/validate_fixtures.py
+// (a repo-root script, not part of the cli/ package) does
+// `sys.path.insert(0, .../cli/tests)` before `from support.cassette import
+// ...` -- support/ is test-only code, never installed -- and needs the
+// same static-vs-runtime bridge mypy.ini's own `mypy_path = cli/tests`
+// already provides for mypy.
 {
-  "extraPaths": ["cli/src"],
+  "extraPaths": ["cli/src", "cli/tests"],
   "exclude": ["tests/fixtures"]
 }

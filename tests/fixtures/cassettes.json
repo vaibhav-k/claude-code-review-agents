@@ -1,0 +1,331 @@
+{
+  "02f2669356559198ac99f5a77495fe2160a58c66368d1d724fc0f1a80fe84c32": {
+    "label": "batch.py",
+    "response": "No high-impact issues found."
+  },
+  "09d51e8a3537554d7123c19b1fbc1a4f7ac59228713ec0036305905d4042d1f0": {
+    "label": "pricing.py, test_discounts.py",
+    "response": "No high-impact issues found."
+  },
+  "0a33a80d6f36bfdbba5ec7cbef8cee8e017213a2a2051427080d2881b6c58de2": {
+    "label": "test_discounts.py",
+    "response": "[MEDIUM] test_discounts.py:3 - Added test asserts a tautology and cannot detect a regression\nImpact: this test will pass regardless of what compute_discount returns, giving false confidence that the VIP-discount branch is covered when it is not.\nFix: assert against the expected literal value, e.g. assert result == 120."
+  },
+  "1957a5a64bd680489ab04ba37633d0c4930109d54eb7e4447546032ec173f38f": {
+    "label": "leaderboard.py",
+    "response": "[HIGH] leaderboard.py:3 \u2014 N+1 query pattern in loop over fixed collection\nImpact: Issues one database query per leaderboard position (3 total) instead of a single batched query, multiplying round-trip latency and connection overhead.\nFix: Replace the list comprehension with a single `db.query(Order).filter(Order.id.in_(top3_ids)).all()` call, then map results by ID to preserve order if needed."
+  },
+  "19819d74c8bce230346d934e3c1b86fcfd0e28a5c746300760fc168bf5326325": {
+    "label": "test_jobs.py",
+    "response": "[HIGH] test_jobs.py:3 \u2014 Test uses fixed sleep instead of waiting on job completion\nImpact: The test is flaky by construction \u2014 if the worker takes longer than 0.5 seconds (under load, resource contention, or CI slowness), the test fails despite correct implementation; conversely, if the worker is faster, the sleep masks timing bugs that would surface in production.\nFix: Replace `time.sleep(0.5)` with a polling loop that checks `get_job_status(\"123\")` in a tight retry-with-backoff pattern until it returns \"complete\" or a timeout is exceeded, so the test passes as soon as the job genuinely completes.\n\n[MEDIUM] test_jobs.py:1 \u2014 New test does not exercise error or edge-case paths\nImpact: Only the happy path (job submitted and completes) is tested; no coverage for job submission failure, worker crash, timeout, or job not found \u2014 the most likely real-world failure modes are invisible to this test.\nFix: Add separate tests for at least: (1) `submit_job` raising an exception or returning an error status, and (2) `get_job_status` called on a non-existent job ID, to ensure error handling is not regressed."
+  },
+  "1e51764cc0cda69efade9a40835a575e95de1e7e85136f1d62bcc142c5f3d7d7": {
+    "label": "Db.java",
+    "response": "No high-impact issues found."
+  },
+  "1fc64ae95fbd9590c10d75675af6d8bf753672ef479c467485754695178202c2": {
+    "label": "config.py",
+    "response": "No high-impact issues found."
+  },
+  "24c57826d9d50a006a847e94eba0629f5ae317722a7e84d156b3f038372ce965": {
+    "label": "Db.java",
+    "response": "[CRITICAL] Db.java:2 \u2014 Resource leak: Connection, PreparedStatement, and ResultSet acquired without guaranteed release\nImpact: All three resources (conn, ps, rs) are never closed, causing connection pool exhaustion and potential unbounded resource accumulation on every invocation.\nFix: Wrap all resource allocations in a try-with-resources block: `try (Connection conn = pool.getConnection(); PreparedStatement ps = conn.prepareStatement(...)) { ResultSet rs = ps.executeQuery(); return rs.next() ? rs.getString(1) : null; }`\n\n[HIGH] Db.java:5 \u2014 ResultSet used without null-check after iteration\nImpact: If `rs.next()` returns false, `rs.getString(1)` is never called, but if it returns true, the code consumes only one row and closes the implicit cursor without explicit cleanup; however, the larger issue is that rs is never closed on the true branch either.\nFix: Ensure rs is closed explicitly on all paths by including it in the try-with-resources (PreparedStatement.closeOnCompletion() closes the ResultSet, but explicit closure via try-with-resources is clearer and safer)."
+  },
+  "24cc79d78636ac273fff3a382196aefdacd8d2b6b6a665259906e1fa3aa56211": {
+    "label": "Db.java",
+    "response": "No high-impact issues found."
+  },
+  "261d40c353f9f30e3467802847aaa500677a580d7eec9b911c36335ad86d878c": {
+    "label": "orders.py",
+    "response": "[HIGH] orders.py:3\u20134 \u2014 N+1 query pattern: one database query per order ID in a loop\n\nImpact: For each order ID in the input list, a separate database round trip is issued; with N order IDs, this scales as O(N) queries instead of O(1), causing linear latency growth and database load.\n\nFix: Replace the loop with a single batched query: `orders = db.query(Order).filter(Order.id.in_(order_ids)).all(); summaries = [o.total for o in {o.id: o for o in orders}.values() if o.id in order_ids]` (or equivalent bulk fetch and map)."
+  },
+  "2b9ae2b8f88ad36073034d6287b4dd738f7079fa39384f3d5f229c20d36ddda2": {
+    "label": "billing.py",
+    "response": "No high-impact issues found."
+  },
+  "2c567daa3ed0ef263cd96dfbb091ba007b93e763f688a1e5135abd336e012be5": {
+    "label": "leaderboard.py",
+    "response": "No high-impact issues found."
+  },
+  "2cb5a110161989875ac2d38866c0f32ea28e66fdd4f036c60ba8532667c48bda": {
+    "label": "orders.py",
+    "response": "[MEDIUM] orders.py:3 - N+1 query: one SELECT per order_id instead of a single batched query\nImpact: for order_ids of realistic request size, this issues that many round trips per call, adding latency roughly linear in list size and multiplying DB load under concurrent requests.\nFix: replace with a single batched query, db.query(Order).filter(Order.id.in_(order_ids)).all(), then map results back to the input order."
+  },
+  "2d2a850f38ae5b1bd4ed60de123bb3c873d612cfb83e8700bd874e5d2cca0ec1": {
+    "label": "billing.py",
+    "response": "[MEDIUM] billing.py:8 - compute_invoice_total duplicates compute_checkout_total's VIP-discount rule\nImpact: the 20%-VIP-discount rule now exists in two places; a future change to the discount threshold or rate that only updates one of them will make checkout and invoicing silently disagree on the same order's total.\nFix: extract the shared rule into one function (e.g. apply_vip_discount) and have both call sites use it."
+  },
+  "2d95527c06046bee4590099afae0ed7bf255422a656b93bba6e656d95f3bebce": {
+    "label": "handlers.py",
+    "response": "[CRITICAL] handlers.py:3 \u2014 SQL injection via unparameterized f-string query\nImpact: Attacker can inject arbitrary SQL by crafting a malicious `id` parameter (e.g. `id=1 OR 1=1`), bypassing authentication, exfiltrating data, or corrupting the database.\nFix: Use parameterized query: `query = \"SELECT * FROM users WHERE id = ?\"` and pass `user_id` as a parameter to `db.execute(query, (user_id,))`."
+  },
+  "2ff66d71c64ba9cc34af6a813a16786b753be8ceec9efd1d303482b08f634750": {
+    "label": "UserController.cs, UserService.cs",
+    "response": "[HIGH] UserService.cs:2 \u2014 Nullable return type not handled at call site\nImpact: UserController.cs calls user.Name without null check; FindUser now returns User?, so user can be null and dereferencing .Name will throw NullReferenceException at runtime.\nFix: Add null check in UserController.cs before accessing user.Name, e.g., `if (user != null) return Ok(user.Name); return NotFound();`"
+  },
+  "3061443c380d2a87f8d6936ea218e70d555d8e10814e11103771902defffb554": {
+    "label": "billing.py",
+    "response": "[MEDIUM] billing.py:8 - compute_invoice_total duplicates compute_checkout_total's VIP-discount rule\nImpact: the 20%-VIP-discount rule now exists in two places; a future change to the discount threshold or rate that only updates one of them will make checkout and invoicing silently disagree on the same order's total.\nFix: extract the shared rule into one function (e.g. apply_vip_discount) and have both call sites use it."
+  },
+  "3477b475dc4da0bc3a8a20d0dedafc2db075dc223df7c5cdde5afb32a44c32e4": {
+    "label": "payments.ts",
+    "response": "[CRITICAL] payments.ts:1 \u2014 Infinite retry loop with no backoff, cap, or failure propagation\nImpact: Any transient or permanent failure in `paymentGateway.charge()` will retry indefinitely without delay, causing the caller to hang forever and amplifying load on a failing payment service into a retry storm.\nFix: Add a retry cap (e.g. `let attempts = 0; while (attempts < 3)`), exponential backoff between retries (e.g. `await sleep(Math.pow(2, attempts) * 100)`), and propagate the final exception after exhaustion (e.g. `throw e;` after the loop exits).\n\n[HIGH] payments.ts:4 \u2014 Retry on non-idempotent operation without validation\nImpact: If `paymentGateway.charge()` succeeds but throws before returning (e.g. network timeout after charging), retrying will charge the card again, causing duplicate billing and financial data corruption.\nFix: Either ensure the payment gateway is idempotent (supports deduplication by orderId) and document that assumption, or implement client-side deduplication by checking order status before retrying (e.g. query order state; only retry if charge failed to commit)."
+  },
+  "34bf3d8adc0397cf57a9d696f6ac6078b45166c76d1155e1e09b45afe11f1e1a": {
+    "label": "rates.ts",
+    "response": "No high-impact issues found."
+  },
+  "38fbde152839868001e38b3e1e037e14d1416eaac5c53dca1cae278b6fa07b2a": {
+    "label": "Migrations/20260909_WidenEmail.cs",
+    "response": "No high-impact issues found."
+  },
+  "396ae1d32c146eaaa83020b1619fcf8883cdedfbdfd9d38ffc7cc9b83d11459b": {
+    "label": "leaderboard.py",
+    "response": "No high-impact issues found."
+  },
+  "39bedaa373b93e40ea83f489bf2c019b08c0bf7629e0e6f2718d7230502f4fef": {
+    "label": "Migrations/20260909_NewStagingTable.cs",
+    "response": "No high-impact issues found."
+  },
+  "3b8295e3a7779339c044470342335b4b7afd96c9821801eecb377cc6d4fcd20e": {
+    "label": "orders.py",
+    "response": "[MEDIUM] orders.py:3 - N+1 query: one SELECT per order_id instead of a single batched query\nImpact: for order_ids of realistic request size, this issues that many round trips per call, adding latency roughly linear in list size and multiplying DB load under concurrent requests.\nFix: replace with a single batched query, db.query(Order).filter(Order.id.in_(order_ids)).all(), then map results back to the input order."
+  },
+  "3c4271784d16a1d2330701786df99383d531239a9e3d72ce7b632ac682ae2ede": {
+    "label": "api.ts, checkout.ts",
+    "response": "No high-impact issues found."
+  },
+  "3c77916ff98be4a6ac5944aaf6419536cab3c60ea0dffced39c86f6fd36aab3b": {
+    "label": "pricing.py, test_discounts.py",
+    "response": "No high-impact issues found."
+  },
+  "3d6d6baac08385c987f382910d74b4628a705031ca1d78dad9b3bb7ec390b281": {
+    "label": "api.ts, checkout.ts",
+    "response": "No high-impact issues found."
+  },
+  "4047dc3ec70743b3c044a99a3dcc56573f7c87f536df644be9d89da6411d3b01": {
+    "label": "pricing.py",
+    "response": "No high-impact issues found."
+  },
+  "45b72c22abd4d06fb03989ffe6785c4f3fc2c8d9e5f5a939d85175964232759e": {
+    "label": "UserController.cs, UserService.cs",
+    "response": "[HIGH] UserController.cs:2 - FindUser now returns User? but caller dereferences without a null check\nImpact: when _repo.Find(id) returns null, this line throws a NullReferenceException, turning a previously well-typed lookup miss into an unhandled 500.\nFix: handle the null case explicitly at the call site, e.g. if (user is null) return NotFound(); return Ok(user.Name);."
+  },
+  "4895f61eac8d61d56069914d501f1bf250b8d231ac60319518093afa7eccbca4": {
+    "label": "pricing.py, test_discounts.py",
+    "response": "No high-impact issues found."
+  },
+  "4a8447c9f131643a54172f03a79654020017e39c64cb6a1bc4239288bfe5f138": {
+    "label": "test_discounts.py",
+    "response": "[HIGH] test_discounts.py:3 \u2014 Test assertion is tautological and cannot fail\nImpact: The assertion `assert result == result` is always true regardless of implementation; any regression in `compute_discount` will not be caught by this test, creating false confidence in coverage.\nFix: Replace with a concrete expected value: `assert result == <expected_discount_amount>` (e.g., `assert result == 60` if a 10% VIP discount on 600 is expected)."
+  },
+  "4b4b0183d535ef35ec84fbeaac52e89aa8e9c5fe75c96c56cb524cb8ed350847": {
+    "label": "pricing.py",
+    "response": "[MEDIUM] pricing.py:2 - New VIP-discount branch has no test coverage in this diff\nImpact: the 20%-vs-5% discount boundary (VIP + total > 500) is exactly the kind of condition that regresses silently on a future refactor; nothing in the test suite currently pins either branch's output.\nFix: add tests asserting compute_discount returns 20% for a VIP order over 500 and 5% for a non-VIP or under-500 order."
+  },
+  "4c04eb9c13eddbda38666f1883dda4c801ea6811427ffda82cc5f8aea16aafda": {
+    "label": "Db.java",
+    "response": "[HIGH] Db.java:2 - Connection acquired from pool is never released\nImpact: every call leaks a pooled connection; under sustained load the pool exhausts and all subsequent DB calls block or fail.\nFix: acquire and release in a try-with-resources block, e.g. try (Connection conn = pool.getConnection(); ...) { ... }."
+  },
+  "4f36bc9fdbd71781ed2ef19ab52dbc2fa27f7e2f614fc11e380d340fc8736a7a": {
+    "label": "test_discounts.py",
+    "response": "[MEDIUM] test_discounts.py:3 \u2014 Test assertion is tautological and cannot fail\nImpact: `assert result == result` is trivially true regardless of the implementation; this test gives false confidence that `compute_discount` works correctly for VIP orders over 500, but will pass even if the function returns the wrong discount rate, crashes, or is deleted entirely.\nFix: replace the assertion with a concrete expected value, e.g. `assert result == 600 * 0.20` (or whatever the correct VIP discount for a 600-total order should be)."
+  },
+  "520910b2ce0ca1d4da3ef6cf17da30964684595c68d034c83a1351dbbc36fbeb": {
+    "label": "leaderboard.py",
+    "response": "No high-impact issues found."
+  },
+  "56f4c308e49329946e06adde7fe6414cfe43e6a14f80ee1e7d3b7701567b10cb": {
+    "label": "UserController.cs, UserService.cs",
+    "response": "No high-impact issues found."
+  },
+  "61c0e45f9fa7b0a33c57153eff389463557a9c4d55b4b0547ca839f43c9f0b80": {
+    "label": "pricing.py",
+    "response": "[MEDIUM] pricing.py:1 \u2014 New discount logic has no test coverage in this diff\nImpact: the VIP-discount boundary (is_vip=True AND total > 500 returning 20% vs. the 5% fallback) is a prime regression vector; without a test pinning both branches' outputs, a future refactor could silently flip the discount rate or drop the VIP check entirely.\nFix: add a test file (e.g. test_pricing.py) with three cases: compute_discount on a VIP order with total=600 asserts 120, a non-VIP order with total=600 asserts 30, and a VIP order at total=500 (the boundary) asserts 25."
+  },
+  "677635ba2f65c1e647ea9c6f0d170fec4404177c4e286c581b932f6c02387d9c": {
+    "label": "Migrations/20260909_NewStagingTable.cs",
+    "response": "No high-impact issues found."
+  },
+  "6e9f8c7ada927b54ab0abeafbd15f1372c556353d3d9e3c160826dc1a8ab68ec": {
+    "label": "billing.py",
+    "response": "[MEDIUM] billing.py:8 - compute_invoice_total duplicates compute_checkout_total's VIP-discount rule\nImpact: the 20%-VIP-discount rule now exists in two places; a future change to the discount threshold or rate that only updates one of them will make checkout and invoicing silently disagree on the same order's total.\nFix: extract the shared rule into one function (e.g. apply_vip_discount) and have both call sites use it."
+  },
+  "71b68429c358252581a2b3509b3cfa71b689c1f9f73c7629b87b531b4928e423": {
+    "label": "Db.java",
+    "response": "[HIGH] Db.java:2 - Connection acquired from pool is never released\nImpact: every call leaks a pooled connection; under sustained load the pool exhausts and all subsequent DB calls block or fail.\nFix: acquire and release in a try-with-resources block, e.g. try (Connection conn = pool.getConnection(); ...) { ... }."
+  },
+  "7203da1a9f832bcece8b0688ecbcca9985bf2ddc49ce00574ddc98b5676ed62a": {
+    "label": "Migrations/20260909_WidenEmail.cs",
+    "response": "No high-impact issues found."
+  },
+  "793878b4e915528be2c5dccc48a3190c3df782480227415fc98ab5307572d215": {
+    "label": "handlers.py",
+    "response": "No high-impact issues found."
+  },
+  "84cc589ba187eb10669ae54be0070d2c7adf6b8919a9fc7f9a656c8957d7dd33": {
+    "label": "UserController.cs, UserService.cs",
+    "response": "No high-impact issues found."
+  },
+  "85f2e8bd72dd53c6ade526f791d4543cb69f2bfc0e853c475bb32a66d12de8f2": {
+    "label": "billing.py",
+    "response": "[MEDIUM] billing.py:8 - compute_invoice_total duplicates compute_checkout_total's VIP-discount rule\nImpact: the 20%-VIP-discount rule now exists in two places; a future change to the discount threshold or rate that only updates one of them will make checkout and invoicing silently disagree on the same order's total.\nFix: extract the shared rule into one function (e.g. apply_vip_discount) and have both call sites use it."
+  },
+  "87af9fa8f8bcdb2d52223345ab54331a8da905fcd212470d782559fe93cefc21": {
+    "label": "config.py",
+    "response": "No high-impact issues found."
+  },
+  "8c87602df754c59acb20f96f63c7031002c3c615d538a5c6c9f6502a6ceb42a6": {
+    "label": "ReportSession.java",
+    "response": "No high-impact issues found."
+  },
+  "8fb860645de95a4893631bc1eb48fa2f7a7fe6e730d7b5eeb73d76bdc1055e33": {
+    "label": "handlers.py",
+    "response": "No high-impact issues found."
+  },
+  "919f690d0c0fe7dfc684aea529b5c9eb57a7e4f455212c47259649f744571340": {
+    "label": "UserController.cs, UserService.cs",
+    "response": "[HIGH] UserController.cs:2 - FindUser now returns User? but caller dereferences without a null check\nImpact: when _repo.Find(id) returns null, this line throws a NullReferenceException, turning a previously well-typed lookup miss into an unhandled 500.\nFix: handle the null case explicitly at the call site, e.g. if (user is null) return NotFound(); return Ok(user.Name);."
+  },
+  "921c4bda215f590d2a6d0cafd5f18b6c66576d9ccb5a2e82992dc42bfbf51dbb": {
+    "label": "handlers.py",
+    "response": "No high-impact issues found."
+  },
+  "93fce51b9ac3c51a8ce8121efe20b178e7991a99a487b537cdbf58d49c887015": {
+    "label": "payments.ts",
+    "response": "[CRITICAL] payments.ts:2 - Unbounded immediate retry around a non-idempotent charge call\nImpact: any transient failure causes a tight retry loop with no backoff or cap, which can both hammer the payment gateway and double-charge the customer if the first attempt actually succeeded upstream before the error surfaced.\nFix: cap retry attempts, add exponential backoff, and pass an idempotency key to paymentGateway.charge so retried attempts cannot double-charge."
+  },
+  "94914065ab7ef1671351f5ec2790e8dd2ed6cdd7563a85123c63b8674df0ec12": {
+    "label": "orders.py",
+    "response": "[HIGH] orders.py:2-5 \u2014 N+1 query pattern in loop\nImpact: Issues one database query per order ID instead of a single batched query; scales linearly with input size.\nFix: Replace the loop with a single batched query: `orders = db.query(Order).filter(Order.id.in_(order_ids)).all(); return [o.total for o in orders]`"
+  },
+  "966de12fbe448bf807a15cc98730c312f974efb580c136b56953bb38f474bdc3": {
+    "label": "api.ts, checkout.ts",
+    "response": "No high-impact issues found."
+  },
+  "9b902213cc07d8954528e07705b72bc8ccb0561159215ced2892c1886d35065e": {
+    "label": "orders.py",
+    "response": "[MEDIUM] orders.py:3 - N+1 query: one SELECT per order_id instead of a single batched query\nImpact: for order_ids of realistic request size, this issues that many round trips per call, adding latency roughly linear in list size and multiplying DB load under concurrent requests.\nFix: replace with a single batched query, db.query(Order).filter(Order.id.in_(order_ids)).all(), then map results back to the input order."
+  },
+  "9c2fa24ba7e3a84a4a29d5db7de21105e55cf7c5234431dacd711df16b8a11aa": {
+    "label": "ReportSession.java",
+    "response": "No high-impact issues found."
+  },
+  "_meta": "Contains placeholder responses seeded from EXPECTED.md via --seed-placeholders-from-expected, NOT live-recorded model output. Refresh with `python scripts/validate_fixtures.py --live` against a real Foundry resource before trusting this cassette to catch a real prompt regression.",
+  "ab17ad676b020fe4658dd93d4cfeb06ca5fa709a503d4719b87c3d3edc184a0c": {
+    "label": "Migrations/20260909_WidenEmail.cs",
+    "response": "No high-impact issues found."
+  },
+  "abaace9d1f6a2090c58077e837151403134fb104b4b8f32c2b62c43157b9c5e6": {
+    "label": "ReportSession.java",
+    "response": "No high-impact issues found."
+  },
+  "b031060a513cb34d55d946e3f3f087c8096458dbb650f8bde978fbd332171e36": {
+    "label": "Migrations/20260909_NewStagingTable.cs",
+    "response": "No high-impact issues found."
+  },
+  "b11d96b54fc417afe51389c323c1b05f3accf13856b0f855c37eb15e5d970d4d": {
+    "label": "leaderboard.py",
+    "response": "No high-impact issues found."
+  },
+  "bce95f71b053261e1d9c39aee4422926666c07934dca5733335de0f699188868": {
+    "label": "test_jobs.py",
+    "response": "[MEDIUM] test_jobs.py:3 - Fixed sleep instead of waiting on job completion\nImpact: under CI load the worker can legitimately take longer than 500ms, making this test fail intermittently regardless of whether the job logic is correct.\nFix: poll get_job_status with a timeout and short interval, or await an explicit completion signal, instead of a fixed sleep."
+  },
+  "c1b3596de7a90012b8f2533a6dbd26796c38084055519e3694db7fb0b891454e": {
+    "label": "UserController.cs, UserService.cs",
+    "response": "No high-impact issues found."
+  },
+  "c332ee02dca2e854eb7537cd6787c68b0cc1492c8c0d06a7c34df46f6f411d58": {
+    "label": "Migrations/20260909_ShrinkEmail.cs",
+    "response": "[HIGH] Migrations/20260909_ShrinkEmail.cs:3 \u2014 Narrowing Email column without safe backfill path\nImpact: Existing rows with email addresses longer than 50 characters will be silently truncated on migration execution, permanently losing data.\nFix: Add a pre-migration validation step that identifies and either rejects the migration or backs up/handles rows where Email exceeds 50 characters before executing the AlterColumn; or widen the target width to accommodate observed email lengths in the current dataset."
+  },
+  "c3995ede92cd9d7da7824681155303488ac2d764800e7db8469885c0401abf1b": {
+    "label": "config.py",
+    "response": "No high-impact issues found."
+  },
+  "c46d9c40ab6670cd5066027862d4a858adb253a3f77131d5218b7fe0b402e7be": {
+    "label": "config.py",
+    "response": "No high-impact issues found."
+  },
+  "c5b9b13634ed48d51b27b56ac4f8d7b9f87001d3d5fa6144f1c4ffb91af46729": {
+    "label": "Migrations/20260909_ShrinkEmail.cs",
+    "response": "[HIGH] Migrations/20260909_ShrinkEmail.cs:4 - Email column narrowed from varchar(255) to varchar(50) with no backfill/validation\nImpact: any existing email longer than 50 characters is silently truncated on migration, corrupting user contact data with no error raised.\nFix: add a pre-migration check/backfill that rejects or remediates rows exceeding the new length before narrowing the column, or keep the wider type."
+  },
+  "c8d36cf30d2f45993be1085d4b2f1bd8f5117e4c48ca84e26672385bc5b98751": {
+    "label": "pricing.py, test_discounts.py",
+    "response": "[MEDIUM] test_discounts.py:18 \u2014 Boundary condition test exercises wrong branch\nImpact: The test at line 18 asserts `compute_discount(make_order(vip=True, total=500)) == 25`, which exercises the non-VIP branch (0.05 multiplier) because the condition is `order.total > 500`, not `>=`. The test passes by accident, masking that a VIP customer at exactly 500 receives the 5% discount instead of 20%.\nFix: Change line 18 assertion to `assert compute_discount(make_order(vip=True, total=500)) == 25` only if that behavior is intentional; if VIP should receive 20% at the boundary, change pricing.py line 2 to `if order.customer.is_vip and order.total >= 500:` and update the test assertion to `assert compute_discount(make_order(vip=True, total=500)) == 100`."
+  },
+  "cb026873571cc3618abc18f84bacd4ed7e2c77b3a64acc63f9bddd745ed2441e": {
+    "label": "billing.py",
+    "response": "[MEDIUM] billing.py:7 \u2014 compute_invoice_total duplicates compute_checkout_total's VIP-discount rule\nImpact: the 20%-VIP-discount rule now exists in two places; a future change to the threshold or rate that only updates one of them will make checkout and invoicing silently disagree on the same order's total.\nFix: extract the shared rule into one function (e.g. apply_vip_discount) and have both call sites use it."
+  },
+  "cc94e1a5e309dff2959106d43059b5073ced42eec104c84abf44dfa8cae6c5a5": {
+    "label": "Db.java",
+    "response": "No high-impact issues found."
+  },
+  "cd4490795fa23722a085ef4eb5241fdc7c5105c538851c78938c66e137494b6a": {
+    "label": "Migrations/20260909_NewStagingTable.cs",
+    "response": "No high-impact issues found."
+  },
+  "d2c7e58010e52365146a9b62678ce2c38f8e7be4cc8bbee69e284beeb9097a71": {
+    "label": "config.py",
+    "response": "No high-impact issues found."
+  },
+  "d687bf9d61de0386f1d1139fe78fa5104953ad4c08dd7d59486f90330db0ddaf": {
+    "label": "Migrations/20260909_ShrinkEmail.cs",
+    "response": "[HIGH] Migrations/20260909_ShrinkEmail.cs:4 - Email column narrowed from varchar(255) to varchar(50) with no backfill/validation\nImpact: any existing email longer than 50 characters is silently truncated on migration, corrupting user contact data with no error raised.\nFix: add a pre-migration check/backfill that rejects or remediates rows exceeding the new length before narrowing the column, or keep the wider type."
+  },
+  "d743b8fe1b763688fdbcaf859cc512f86fde64d1da7ae6e70b44727db6a3d527": {
+    "label": "Migrations/20260909_ShrinkEmail.cs",
+    "response": "[CRITICAL] Migrations/20260909_ShrinkEmail.cs:4 \u2014 Narrowing Email column from varchar(255) to varchar(50) without backfill or validation\nImpact: Any existing row with an email address longer than 50 characters will be silently truncated on migration, corrupting user identities and breaking login/contact integrity.\nFix: Before executing the AlterColumn, add a migration step that either (1) backfills by truncating emails >50 chars to their first 50 characters and logging affected user IDs for manual review, or (2) explicitly fails the migration if any email exceeds 50 characters, forcing the operator to resolve the data first. Given that RFC 5321 permits emails up to 254 characters and real user emails routinely exceed 50, option (2) is strongly preferred to avoid silent data loss."
+  },
+  "dd0916df3f6506576dae825e5520b363b2116dbe8917d9251c33026180657131": {
+    "label": "Db.java",
+    "response": "No high-impact issues found."
+  },
+  "ddbfb3df7958e48132e6bb97bfe642d7482abdef71e1fd7c2c872068322c9844": {
+    "label": "test_jobs.py",
+    "response": "[HIGH] test_jobs.py:3 \u2014 Fixed sleep duration creates flaky test\nImpact: Test depends on a hardcoded 0.5-second sleep to assume job completion; if job processing takes longer under load or on slow CI runners, the test will intermittently fail even though the implementation is correct.\nFix: Replace the sleep with a polling loop that checks job status in a loop with exponential backoff or a timeout, e.g. `wait_for_condition(lambda: get_job_status(\"123\") == \"complete\", timeout=5)`, so the test waits only as long as necessary and fails only if the job genuinely does not complete.\n\n[HIGH] test_jobs.py:1-4 \u2014 Test cannot verify job completion behavior\nImpact: The test calls `submit_job()` and `get_job_status()` but neither function is imported or defined in the visible scope; the test will fail at import/runtime with a NameError, producing no useful signal about whether the job logic works.\nFix: Add imports at the top of the file (e.g. `from jobs import submit_job, get_job_status` or equivalent) and ensure `time` is imported as well; verify the functions exist in the codebase before committing this test."
+  },
+  "dfa9cf5b95907616a935c60df15522f53db5cb650d2178b76545b205fb2cb9f6": {
+    "label": "ReportSession.java",
+    "response": "No high-impact issues found."
+  },
+  "e11022d611cdd7ccb0f9ec03fa8404114313e281a0dbb882604fdc863eb11be3": {
+    "label": "Migrations/20260909_ShrinkEmail.cs",
+    "response": "[HIGH] Migrations/20260909_ShrinkEmail.cs:4 - Email column narrowed from varchar(255) to varchar(50) with no backfill/validation\nImpact: any existing email longer than 50 characters is silently truncated on migration, corrupting user contact data with no error raised.\nFix: add a pre-migration check/backfill that rejects or remediates rows exceeding the new length before narrowing the column, or keep the wider type."
+  },
+  "e5be731b639a9aaa417e4ade20ea97a18219da56de3c29d0cb9ff81650017191": {
+    "label": "Migrations/20260909_WidenEmail.cs",
+    "response": "No high-impact issues found."
+  },
+  "e84754ad53f4b7277c210861300a24e5881d0098ee37362702294ff3d022a271": {
+    "label": "rates.ts",
+    "response": "No high-impact issues found."
+  },
+  "eed6813b64f1ccb8b4fd2e668deb5a2fb32b5f747e60c3226c6ed8ac9a264719": {
+    "label": "handlers.py",
+    "response": "No high-impact issues found."
+  },
+  "f35f464ae0f5ccd0f1aff6ea273eb0e5d76c72d4ec23cb737a0479b0cb11ebb1": {
+    "label": "handlers.py",
+    "response": "[CRITICAL] handlers.py:4 - SQL injection via unparameterized user_id\nImpact: attacker-controlled id is concatenated directly into SQL, allowing arbitrary query injection.\nFix: use a parameterized query, e.g. db.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,))."
+  },
+  "f52ca92cddb29e91947ebcbd58af9d5fe52300df0b1d5994878fc598d14548eb": {
+    "label": "Migrations/20260909_WidenEmail.cs",
+    "response": "No high-impact issues found."
+  },
+  "f622f10e1fda311478cc8d0cccc1912069a3f359307b59ea34c9127d6945b903": {
+    "label": "batch.py",
+    "response": "No high-impact issues found."
+  },
+  "fb38b3af01ab08ad04a6cf101e0e1954560f56aaf32da0895390bff969ca9957": {
+    "label": "Db.java",
+    "response": "[HIGH] Db.java:2 - Connection acquired from pool is never released\nImpact: every call leaks a pooled connection; under sustained load the pool exhausts and all subsequent DB calls block or fail.\nFix: acquire and release in a try-with-resources block, e.g. try (Connection conn = pool.getConnection(); ...) { ... }."
+  },
+  "ff3650b11e9a5e2b5fb8d9365f14f5551fc7696d096907ca6df97b8ef7490b1b": {
+    "label": "Migrations/20260909_NewStagingTable.cs",
+    "response": "No high-impact issues found."
+  }
+}
