@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-review"
-version = "0.7.0"
+version = "0.7.1"
 description = "Evidence-based automated code review, staged-diff commit messages, and guarded self-healing for any git repository. Talks to Claude exclusively via Microsoft Foundry (Azure AI Foundry)."
 readme = "README.md"
 requires-python = ">=3.10"

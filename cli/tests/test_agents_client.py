@@ -37,12 +37,12 @@ class _FakeStatusError(Exception):
         self.request = SimpleNamespace(url=url)
         self.response = SimpleNamespace(status_code=401)
 
-
 _ENV_VARS = (
     "ANTHROPIC_FOUNDRY_RESOURCE",
     "ANTHROPIC_FOUNDRY_API_KEY",
     "ANTHROPIC_FOUNDRY_USE_ENTRA_ID",
     "ANTHROPIC_FOUNDRY_MODEL",
+    "ANTHROPIC_FOUNDRY_BASE_URL",
 )
 
 
@@ -71,6 +71,39 @@ def test_constructs_with_resource_and_api_key(monkeypatch: pytest.MonkeyPatch):
     _clear_env(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "my-resource")
     monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "fake-key")
+    reviewer = AnthropicFoundryReviewer()
+    assert reviewer._model == DEFAULT_MODEL
+
+
+def test_base_url_alone_satisfies_the_no_resource_check(monkeypatch: pytest.MonkeyPatch):
+    # Regression test: ANTHROPIC_FOUNDRY_BASE_URL is documented in
+    # .env.example as a real, supported (if advanced/rare) alternative to
+    # a resource name -- but the resource check used to run unconditionally,
+    # so this documented path was actually unreachable. base_url alone,
+    # with no resource set at all, must now construct successfully.
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_BASE_URL", "https://custom.example/anthropic")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "fake-key")
+    reviewer = AnthropicFoundryReviewer()
+    assert reviewer._model == DEFAULT_MODEL
+
+
+def test_base_url_and_resource_both_set_raises_a_clear_error(monkeypatch: pytest.MonkeyPatch):
+    # anthropic.AnthropicFoundry itself treats base_url and resource as
+    # mutually exclusive (raises ValueError if both are passed) -- caught
+    # here first with a clearer, more actionable message.
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_BASE_URL", "https://custom.example/anthropic")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "my-resource")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "fake-key")
+    with pytest.raises(RuntimeError, match="mutually exclusive"):
+        AnthropicFoundryReviewer()
+
+
+def test_base_url_works_with_entra_id_auth_too(monkeypatch: pytest.MonkeyPatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_BASE_URL", "https://custom.example/anthropic")
+    monkeypatch.setenv("ANTHROPIC_FOUNDRY_USE_ENTRA_ID", "1")
     reviewer = AnthropicFoundryReviewer()
     assert reviewer._model == DEFAULT_MODEL
 
@@ -119,9 +152,7 @@ def test_use_entra_id_env_var_falsy_string_does_not_enable_entra_id(
         AnthropicFoundryReviewer()
 
 
-def test_use_entra_id_env_var_truthy_string_still_enables_entra_id(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_use_entra_id_env_var_truthy_string_still_enables_entra_id(monkeypatch: pytest.MonkeyPatch):
     # Companion case: a genuinely truthy value must still work (guards
     # against an overcorrection that makes _env_flag too strict).
     _clear_env(monkeypatch)
@@ -131,9 +162,7 @@ def test_use_entra_id_env_var_truthy_string_still_enables_entra_id(
     assert reviewer._model == DEFAULT_MODEL
 
 
-def test_resource_and_api_key_from_env_are_stripped_of_whitespace(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_resource_and_api_key_from_env_are_stripped_of_whitespace(monkeypatch: pytest.MonkeyPatch):
     # Regression test: a resource name or key copied from a browser, a
     # .env file, or a PowerShell here-string commonly picks up a trailing
     # newline or stray space. Confirmed directly against the anthropic
@@ -152,18 +181,14 @@ def test_resource_and_api_key_from_env_are_stripped_of_whitespace(
     assert reviewer._client.base_url == "https://my-resource.services.ai.azure.com/anthropic/"
 
 
-def test_resource_and_api_key_kwargs_are_also_stripped_of_whitespace(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_resource_and_api_key_kwargs_are_also_stripped_of_whitespace(monkeypatch: pytest.MonkeyPatch):
     _clear_env(monkeypatch)
     reviewer = AnthropicFoundryReviewer(resource="  my-resource  ", api_key="  my-key  ")
     assert reviewer._client.api_key == "my-key"
     assert reviewer._client.base_url == "https://my-resource.services.ai.azure.com/anthropic/"
 
 
-def test_whitespace_only_resource_is_treated_as_missing(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_whitespace_only_resource_is_treated_as_missing(monkeypatch: pytest.MonkeyPatch):
     _clear_env(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "   ")
     monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "fake-key")
@@ -179,9 +204,7 @@ def test_whitespace_only_api_key_is_treated_as_missing(monkeypatch: pytest.Monke
         AnthropicFoundryReviewer()
 
 
-def test_connection_error_is_enriched_with_the_attempted_host_and_a_hint(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_connection_error_is_enriched_with_the_attempted_host_and_a_hint(monkeypatch: pytest.MonkeyPatch):
     # Real-world trigger: ANTHROPIC_FOUNDRY_RESOURCE set to a model
     # deployment name (e.g. "gpt-5.2-1") instead of the actual Foundry
     # resource name -- the resulting hostname doesn't exist, so the SDK
@@ -206,9 +229,7 @@ def test_connection_error_is_enriched_with_the_attempted_host_and_a_hint(
     assert "deployment name" in str(exc_info.value)
 
 
-def test_non_connection_errors_from_the_sdk_are_not_swallowed_or_rewrapped(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_non_connection_errors_from_the_sdk_are_not_swallowed_or_rewrapped(monkeypatch: pytest.MonkeyPatch):
     # Only the specific "no HTTP response at all" case should be
     # rewrapped -- an error that already carries an HTTP response (e.g. a
     # 401 from a resource that DOES resolve) must propagate unchanged, so
@@ -233,9 +254,7 @@ def test_non_connection_errors_from_the_sdk_are_not_swallowed_or_rewrapped(
         reviewer.complete("system", "user")
 
 
-def test_complete_joins_only_text_blocks_from_the_response(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_complete_joins_only_text_blocks_from_the_response(monkeypatch: pytest.MonkeyPatch):
     # Every other test here only ever exercises complete()'s exception
     # paths (connection-error enrichment, pass-through) -- this covers the
     # actual successful-call join/filter logic, so a regression that loses
@@ -258,14 +277,14 @@ def test_complete_joins_only_text_blocks_from_the_response(
             SimpleNamespace(type="text", text="second"),
         ]
     )
-    monkeypatch.setattr(reviewer._client.messages, "create", lambda *args, **kwargs: fake_response)
+    monkeypatch.setattr(
+        reviewer._client.messages, "create", lambda *args, **kwargs: fake_response
+    )
 
     assert reviewer.complete("system", "user") == "first second"
 
 
-def test_model_falls_back_to_default_when_nothing_else_is_set(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_model_falls_back_to_default_when_nothing_else_is_set(monkeypatch: pytest.MonkeyPatch):
     _clear_env(monkeypatch)
     monkeypatch.setenv("ANTHROPIC_FOUNDRY_RESOURCE", "my-resource")
     monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "fake-key")
@@ -273,9 +292,7 @@ def test_model_falls_back_to_default_when_nothing_else_is_set(
     assert reviewer._model == DEFAULT_MODEL
 
 
-def test_model_env_var_is_used_when_no_explicit_model_is_passed(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_model_env_var_is_used_when_no_explicit_model_is_passed(monkeypatch: pytest.MonkeyPatch):
     # The actual feature request this covers: set it once via env/.env
     # instead of passing --model on every invocation.
     _clear_env(monkeypatch)

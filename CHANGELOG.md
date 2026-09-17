@@ -3,6 +3,37 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.1] — 2026-09-17
+
+### Fixed
+
+- `ANTHROPIC_FOUNDRY_BASE_URL` -- documented in `cli/.env.example` since
+  0.4.4 as a real, supported (if advanced/rare) alternative to a Foundry
+  resource name -- was actually unusable: `AnthropicFoundryReviewer`
+  required a non-empty resource unconditionally, so the base-url-only
+  path the docs described could never be reached. Now a resource name OR
+  `ANTHROPIC_FOUNDRY_BASE_URL` satisfies construction (mutually exclusive,
+  matching `anthropic.AnthropicFoundry`'s own constructor contract, with a
+  clearer error than the SDK's if both are set), for both API-key and
+  Entra ID auth. Found during a documentation-accuracy pass, not a user
+  report -- caught by checking that every `.env.example`/`DESIGN.md`
+  claim about supported configuration actually has a working code path,
+  not just by reading the code in isolation.
+
+### Docs
+
+Stale references found and corrected during the same pass (none changed
+behavior, only what the docs claimed about it):
+
+- `DESIGN.md`'s file manifest and architecture prose still described
+  `discovery.py` as detecting the target repo's language mix; that
+  capability was removed as dead code in 0.7.0 (nothing ever consumed
+  it -- routing has always worked directly off diff-content patterns).
+  Also missing from the file manifest: `layout.py` (added in 0.7.0) and
+  the actual current test count (had drifted to 80; now 114).
+- `CONTRIBUTING.md` pointed at `docs/DESIGN.md`; the file has always
+  lived at the repo root as `DESIGN.md` -- no `docs/` directory exists.
+
 ## [0.7.0] — 2026-09-10
 
 ### Changed

@@ -210,7 +210,6 @@ def compute_checkout_total(order):
         return order.total * 0.80
     return order.total
 
-
 def compute_invoice_total(order):
     # copy-pasted from compute_checkout_total when invoicing was added
     if order.customer.is_vip and order.total > 500:
@@ -442,12 +441,9 @@ def compute_discount(order):
         return order.total * 0.20
     return order.total * 0.05
 
-
 # test_discounts.py (same diff)
 def test_vip_discount_over_500():
     assert compute_discount(make_order(vip=True, total=600)) == 120
-
-
 def test_non_vip_discount():
     assert compute_discount(make_order(vip=False, total=600)) == 30
 ```
@@ -655,9 +651,12 @@ changed (client class, auth, resource name).
 auth modes, validated eagerly at construction for the same reason the
 original API-key check was eager (see "What TDD actually caught," below):
 a Foundry **resource name** (`ANTHROPIC_FOUNDRY_RESOURCE` / `--resource`)
-is required either way, then either an **API key**
-(`ANTHROPIC_FOUNDRY_API_KEY` / `--resource`'s sibling `api_key=`, the
-default) or **Entra ID** (Azure AD) via `azure-identity`'s
+is required either way -- unless `ANTHROPIC_FOUNDRY_BASE_URL` is set
+instead (env-var only, no `--base-url` flag; a rare, advanced override for
+a custom endpoint, mutually exclusive with a resource, matching
+`anthropic.AnthropicFoundry`'s own constructor contract) -- then either an
+**API key** (`ANTHROPIC_FOUNDRY_API_KEY` / `--resource`'s sibling
+`api_key=`, the default) or **Entra ID** (Azure AD) via `azure-identity`'s
 `DefaultAzureCredential` (`ANTHROPIC_FOUNDRY_USE_ENTRA_ID=1` /
 `--use-entra-id`) — the latter an optional dependency
 (`pip install -e ".[azure-ad]"`), since API-key auth doesn't need it.
@@ -678,15 +677,16 @@ cli/src/agent_review/orchestrator.py    # diff -> route -> (cache hit | model ca
 cli/src/agent_review/routing.py         # zero-cost deterministic port of triage-router.md's rule table
 cli/src/agent_review/cache.py           # .agent-cache/manifest.json — blob-hash + agent-set keyed
 cli/src/agent_review/git_utils.py       # git plumbing against an arbitrary target repo path
-cli/src/agent_review/discovery.py       # language + test-runner auto-discovery
+cli/src/agent_review/discovery.py       # test-runner auto-discovery via marker files
 cli/src/agent_review/prompts.py         # .agent-rules/ -> .claude/ -> bundled default_rules/ lookup
+cli/src/agent_review/layout.py          # shared target-repo layout constants (init.py + prompts.py)
 cli/src/agent_review/findings.py        # output-contract parser/sorter (shared with the orchestrator)
 cli/src/agent_review/agents_client.py   # Reviewer protocol + real AnthropicFoundryReviewer (Azure only)
 cli/src/agent_review/commit.py          # staged-diff commit message generator (no co-author trailer)
 cli/src/agent_review/healing.py         # guarded self-healing: propose a patch, apply only if --apply
 cli/src/agent_review/init.py            # agent-init: scaffolds .agent-rules/, .agent-cache/, DESIGN.md
 cli/src/agent_review/default_rules/     # bundled snapshot of CLAUDE.md + the 7 specialist prompts
-cli/tests/                              # 80 pytest tests, including full CLI-entry-point integration tests
+cli/tests/                              # 114 pytest tests, including full CLI-entry-point integration tests
 ```
 
 ### Local caching (requirement 1: cache isolation + incremental analysis)
@@ -726,11 +726,15 @@ explicit argument (`git -C <repo> ...`) rather than assuming the current
 working directory — including a fix, found via testing, for brand-new
 files that were never `git add`ed (`changed_files()` originally missed
 them entirely; a review tool that can't see a file someone just wrote is a
-real functional gap, not an edge case). `discovery.py` detects language mix
-and test runner via marker files (`pyproject.toml`/`pytest.ini` → pytest,
-`package.json` → npm test, `pom.xml` → Maven, `build.gradle[.kts]` →
-Gradle, `Cargo.toml` → cargo, `CMakeLists.txt` → ctest, `*.csproj`/`*.sln`
-→ dotnet). `commit.py` generates a semantic commit message for the target
+real functional gap, not an edge case). `discovery.py` detects the target
+repo's test runner via marker files (`pyproject.toml`/`pytest.ini` →
+pytest, `package.json` → npm test, `pom.xml` → Maven, `build.gradle[.kts]`
+→ Gradle, `Cargo.toml` → cargo, `CMakeLists.txt` → ctest, `*.csproj`/`*.sln`
+→ dotnet) — it no longer also detects a repo's language mix; that was
+removed as dead code (nothing consumed it — routing.py's specialist
+routing has always worked directly off diff-content patterns, never off a
+detected language label). `commit.py` generates a semantic commit message
+for the target
 repo's staged diff and — per the user's own specification — never adds a
 co-author or attribution trailer; this is unrelated to and does not
 override the attribution policy Claude follows for its own commits to

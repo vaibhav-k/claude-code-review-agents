@@ -11,7 +11,7 @@ There is one `triage-router` and seven specialists, and that's the whole
 system. If you have a defect class that doesn't fit an existing specialist's
 scope, the first move is to check whether it actually belongs inside an
 existing agent's domain (most things do — see the risk-order grouping
-rationale in `docs/DESIGN.md`, Section F). Only propose a ninth agent if you
+rationale in `DESIGN.md`, Section F). Only propose a ninth agent if you
 are also proposing which existing agent to retire or merge to make room, and
 justify why the merge doesn't create overlap.
 

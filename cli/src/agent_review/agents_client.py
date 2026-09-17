@@ -48,6 +48,7 @@ ENV_RESOURCE = "ANTHROPIC_FOUNDRY_RESOURCE"
 ENV_API_KEY = "ANTHROPIC_FOUNDRY_API_KEY"
 ENV_USE_ENTRA_ID = "ANTHROPIC_FOUNDRY_USE_ENTRA_ID"
 ENV_MODEL = "ANTHROPIC_FOUNDRY_MODEL"
+ENV_BASE_URL = "ANTHROPIC_FOUNDRY_BASE_URL"
 
 
 def _env_flag(name: str) -> bool:
@@ -66,11 +67,14 @@ class Reviewer(Protocol):
 
 
 class AnthropicFoundryReviewer:
-    """Real implementation: Claude via Microsoft Foundry. Used when
+    """
+    Real implementation: Claude via Microsoft Foundry. Used when
     actually talking to the API.
 
     Requires the `anthropic` package (>=0.74.0, when `AnthropicFoundry`
-    was added) and a Foundry resource name, plus one of two auth modes:
+    was added) and either a Foundry resource name or (rare, advanced) a
+    custom `ANTHROPIC_FOUNDRY_BASE_URL` -- the two are mutually exclusive,
+    env-var only for the latter -- plus one of two auth modes:
 
     - API key (default): `ANTHROPIC_FOUNDRY_API_KEY` environment variable,
       or `api_key` passed explicitly.
@@ -106,7 +110,6 @@ class AnthropicFoundryReviewer:
     ):
         try:
             from anthropic import AnthropicFoundry  # noqa: PLC0415 -- deliberately
-
             # deferred: makes a missing/too-old `anthropic` package a clean
             # RuntimeError instead of an import-time crash for every user of
             # this module, including tests that never construct
@@ -127,11 +130,28 @@ class AnthropicFoundryReviewer:
         # identical to a genuinely wrong credential -- strip it here so
         # that specific, very common mistake is eliminated up front.
         resolved_resource = (resource or os.environ.get(ENV_RESOURCE) or "").strip()
-        if not resolved_resource:
+        # ANTHROPIC_FOUNDRY_BASE_URL (env-var only -- no --base-url flag,
+        # matching .env.example's own framing of this as an advanced,
+        # rarely-needed override): a custom endpoint in place of the
+        # resource-derived one. `anthropic.AnthropicFoundry` itself treats
+        # base_url and resource as mutually exclusive (it raises if both
+        # are non-None), so that's enforced here too, with a clearer
+        # message than the SDK's -- and, critically, resolved_resource is
+        # NOT required when a base_url is supplied instead.
+        resolved_base_url = (os.environ.get(ENV_BASE_URL) or "").strip()
+        if resolved_base_url and resolved_resource:
+            raise RuntimeError(
+                f"Both {ENV_BASE_URL} and a Foundry resource "
+                f"({ENV_RESOURCE}, or --resource) are set -- these are "
+                f"mutually exclusive. Unset {ENV_BASE_URL} unless you "
+                "specifically need to override the resource-derived endpoint."
+            )
+        if not resolved_base_url and not resolved_resource:
             raise RuntimeError(
                 f"No Microsoft Foundry resource configured. Set the "
                 f"{ENV_RESOURCE} environment variable to your "
-                "Foundry resource name (or pass resource= explicitly)."
+                "Foundry resource name (or pass resource= explicitly), or "
+                f"set {ENV_BASE_URL} to a custom endpoint URL."
             )
 
         if use_entra_id is None:
@@ -149,9 +169,14 @@ class AnthropicFoundryReviewer:
                     "Install it with: pip install azure-identity"
                 ) from exc
             token_provider = get_bearer_token_provider(DefaultAzureCredential(), _ENTRA_SCOPE)
-            self._client = AnthropicFoundry(
-                azure_ad_token_provider=token_provider, resource=resolved_resource
-            )
+            if resolved_base_url:
+                self._client = AnthropicFoundry(
+                    azure_ad_token_provider=token_provider, base_url=resolved_base_url
+                )
+            else:
+                self._client = AnthropicFoundry(
+                    azure_ad_token_provider=token_provider, resource=resolved_resource
+                )
         else:
             resolved_key = (api_key or os.environ.get(ENV_API_KEY) or "").strip()
             if not resolved_key:
@@ -162,7 +187,10 @@ class AnthropicFoundryReviewer:
                     f"{ENV_USE_ENTRA_ID}=1 to authenticate via "
                     "Entra ID instead."
                 )
-            self._client = AnthropicFoundry(api_key=resolved_key, resource=resolved_resource)
+            if resolved_base_url:
+                self._client = AnthropicFoundry(api_key=resolved_key, base_url=resolved_base_url)
+            else:
+                self._client = AnthropicFoundry(api_key=resolved_key, resource=resolved_resource)
 
         # Same precedence and whitespace-stripping treatment as
         # resource/api_key above, for the same reasons (a deployment name
@@ -175,7 +203,9 @@ class AnthropicFoundryReviewer:
         # being treated as unset -- caught by
         # test_empty_model_env_var_falls_back_to_default.
         self._model = (
-            (model or "").strip() or (os.environ.get(ENV_MODEL) or "").strip() or DEFAULT_MODEL
+            (model or "").strip()
+            or (os.environ.get(ENV_MODEL) or "").strip()
+            or DEFAULT_MODEL
         )
 
     def complete(self, system_prompt: str, user_message: str) -> str:
