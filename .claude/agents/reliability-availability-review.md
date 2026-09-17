@@ -63,6 +63,20 @@ domain).
   an availability-shaped decision; defer.
 - Do not report generic "add more logging" or "add a metric" advice with no
   concrete failure scenario it prevents.
+- Do not report a retry loop for failing to classify errors as
+  "retryable" vs. "permanent" before retrying, as long as it already has
+  the three properties the Retry/backoff defects bullet above actually
+  requires: a cap on attempts, backoff between them, and propagation of
+  the final failure once exhausted (e.g. a `for` loop bounded at 3
+  attempts with exponential `sleep` between them that `throw`s after the
+  loop on a read/idempotent call). Retrying a call that will deterministically
+  fail again (a permanently invalid input, an auth failure) wastes some
+  latency inside that cap, but the loop still terminates and the caller
+  still learns about the failure — that is inefficiency, not an
+  availability defect. Only report a retry-classification gap if it
+  removes one of the three required properties (e.g. the failure gets
+  swallowed instead of propagated, or the retry has no cap and a
+  permanently-failing call now retries forever).
 - Do not report missing tests for failure-path behavior — flag the defect
   itself; testing-coverage-review owns coverage gaps.
 

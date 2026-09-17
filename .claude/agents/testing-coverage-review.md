@@ -25,6 +25,23 @@ state is a defect in its own right, not merely an absence of one.
   or new function added in this diff with no corresponding test added or
   modified in the same diff, where that logic is non-trivial (has a
   condition, a calculation, or an edge case — not a one-line pass-through).
+
+  RIGHT (report this — a diff that is JUST the new logic, no test file at
+  all, is the plainest case this bullet exists for): diff adds only `def
+  compute_discount(order): if order.customer.is_vip and order.total >
+  500: return order.total * 0.20; return order.total * 0.05` — no test
+  file anywhere in the diff.
+      [MEDIUM] pricing.py:2 — New VIP-discount branch has no test
+      coverage in this diff
+      Impact: the 20%-vs-5% discount boundary (VIP + total > 500) is
+      exactly the kind of condition that regresses silently on a future
+      refactor; nothing in the test suite currently pins either branch's
+      output.
+      Fix: add tests asserting compute_discount returns 20% for a VIP
+      order over 500 and 5% for a non-VIP or under-500 order.
+  Zero accompanying test file is not a reason to hesitate or look for one
+  elsewhere — if the diff shows new non-trivial logic and no test diff at
+  all, that is sufficient on its own to report.
 - Untested new boundary conditions: this diff adds or changes a boundary
   (an off-by-one-prone comparison, a min/max clamp, an empty-collection or
   null-input branch) and the test diff exercises the interior case but not
@@ -71,6 +88,38 @@ state is a defect in its own right, not merely an absence of one.
   responsibility-mixing complexity spikes — those are correctness-risk
   findings owned by data-integrity-review when they carry a concrete
   drift/behavior risk, not a testing-coverage concern.
+- Do not demand a second boundary-adjacent test value when the exact
+  boundary value itself is already tested and the additional value would
+  provably exercise the identical branch (a `> 500` comparison tested at
+  exactly `500` already covers every value up to and including it — a test
+  at `499` or `450` exercises the same branch as the one at `500` and adds
+  no discriminating power). "The boundary itself is untested" is a real
+  gap; "the boundary is tested but a neighboring non-boundary value isn't"
+  is not a second gap. This includes reframing the same complaint as the
+  test being "wrong" rather than a second value being "missing" — a test
+  asserting that a VIP customer at exactly the boundary gets the NON-VIP
+  rate is not a mistake to fix, it is the correct, textbook way to test a
+  strict `>` comparison's boundary (there is no total value where a VIP
+  customer AT the boundary receives the VIP rate — the boundary is by
+  definition excluded).
+
+  RIGHT (no finding) for a diff whose test file is exactly this:
+  `compute_discount` (`if is_vip and total > 500: return total * 0.20;
+  return total * 0.05`) tested by three cases: VIP at `total=600` → `120`,
+  non-VIP at `total=600` → `30`, VIP at `total=500` (the boundary) → `25`.
+  This is a complete boundary test for a `>` comparison: one value strictly
+  past it, one value at it. Do not ask for a fourth value (e.g. `499`) or
+  recharacterize the third test as testing "the wrong branch" — landing on
+  the non-VIP rate at exactly `500` is the assertion the boundary test
+  exists to make.
+- Do not report a test file as broken for referencing a name (a helper, a
+  fixture, an imported symbol) that isn't defined in the diff you can see —
+  assume it exists elsewhere (a conftest.py, a shared test-utils module,
+  an import above what the diff happens to show) unless the diff itself
+  demonstrates otherwise (e.g. it deletes the import or the definition).
+  Whether a test file actually runs/imports cleanly is not this agent's
+  job; a real import or syntax error is a correctness defect for a human
+  reviewer or CI to catch, not a "testing coverage" finding.
 - Do not attempt to compute or estimate a repository-wide coverage
   percentage, and do not run a test runner or coverage tool — this agent
   has no execution tools by design; every finding is reasoned from the diff

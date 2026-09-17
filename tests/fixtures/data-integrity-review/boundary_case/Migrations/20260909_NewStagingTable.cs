@@ -1,3 +1,3 @@
 migrationBuilder.CreateTable(
     name: "StagingImports",
-    columns: table => new { Email = table.Column<string>(type: "varchar(50)") });
+    columns: table => new { BatchLabel = table.Column<string>(type: "varchar(20)") });

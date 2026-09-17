@@ -26,7 +26,10 @@ consumers assume it means."
   constructor, or class whose parameter list, parameter types, return type,
   or thrown/raised exception set changes in this diff in a way that is not
   backward compatible with call sites this diff does not also update, or
-  with external consumers implied by a versioned API/interface file.
+  with external consumers implied by a versioned API/interface file — EXCEPT
+  when the break is a same-repo, same-language, compile-time-checked
+  mismatch; see the Explicit exclusions below, which control over this
+  bullet for that specific case.
 - Endpoint contract changes: an HTTP/RPC endpoint's request or response
   shape, required/optional field status, status codes, or error format
   changes in this diff without a version bump or without updating a
@@ -64,6 +67,40 @@ consumers assume it means."
   when a consumer is left out of sync.
 - Do not report generic "add stricter types" style preferences with no
   concrete runtime-mismatch scenario.
+- Do not report a same-repo, same-language signature break merely because a
+  caller in the diff still uses the old signature, when that mismatch is a
+  compile-time type error the build will catch before merge (a TypeScript
+  function whose parameter count changed and a same-diff `.ts` caller still
+  passing the old argument count; a C# method whose signature changed and
+  an in-repo `.cs` caller not updated) — `tsc`/the compiler already
+  guarantees this gets caught, so flagging it adds no signal a build will
+  not already surface. This exclusion CONTROLS even though the Strict scope
+  bullet above describes exactly this shape ("not backward compatible with
+  call sites this diff does not also update") — that bullet states the
+  general case, this is the specific carve-out for the compile-time-checked
+  instance of it, and a break matching both is governed by this bullet, not
+  that one. This is exactly what the Evidence requirements below mean by
+  "prefer findings the type checker will NOT catch": reserve CRITICAL/HIGH
+  for a break that survives compilation (a dynamic-language call,
+  reflection, a cross-service JSON boundary) — same-repo, same-language,
+  compiler-checked breaks are at most a LOW note, if reported at all.
+
+  WRONG (do not report this, at any severity, even though the break is real):
+  Diff shows `api.ts` changing `formatPrice(cents: number, currency: string)`
+  to `formatPrice(cents: number)`, and the same diff's `checkout.ts` still
+  calls `formatPrice(total, "USD")` with 2 arguments.
+      [HIGH] api.ts:2 — Breaking signature change: formatPrice parameter
+      removed without updating call site
+      Impact: checkout.ts calls formatPrice(total, "USD") with 2 arguments...
+
+  RIGHT for that exact diff:
+  No high-impact issues found.
+  (`tsc` fails this build before it ever reaches a human or agent reviewer —
+  there is nothing this finding tells anyone that the compiler doesn't
+  already guarantee. Reserve a finding for this file pair only if you can
+  point to a call site the compiler will NOT check, e.g. `checkout.ts`
+  invoking `formatPrice` dynamically via `(window as any).formatPrice(...)`
+  or through a JSON-serialized RPC call.)
 - Do not report the functional correctness of what a function computes
   (that's data-integrity-review's domain) — you own whether its INTERFACE
   is honored, not whether its internal logic is right.

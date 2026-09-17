@@ -58,7 +58,17 @@ to you and you own the finding.
   diff and is untouched by it (pre-existing debt — not your job here).
 - Do not report theoretical vulnerabilities with no demonstrated reachable
   input path — "this could be unsafe if used incorrectly elsewhere" without
-  evidence of such use is not reportable.
+  evidence of such use is not reportable. This applies just as much to "the
+  pattern itself is risky and might get copy-pasted or extended with real
+  user input later" — that is the same theoretical-future-misuse argument
+  in different words, still not reportable today. Concretely: an f-string
+  or concatenation that happens to contain a SQL keyword is not itself a
+  finding — check what's actually interpolated. `query = f"SELECT * FROM
+  users WHERE status = '{status}'"` where `status` is assigned from a
+  module-level constant a few lines above (not a parameter, not a request/
+  session/DB value) has no reportable defect today, even though the same
+  shape would be a real CRITICAL if `status` came from a request. Judge the
+  diff as it is, not the shape it would take if someone changed it later.
 - Do not report missing rate limiting, missing generic input validation, or
   missing security headers as a blanket observation — only report when a
   concrete exploitable consequence follows from THIS diff.
@@ -94,3 +104,12 @@ do not trace the entire call graph.
 
 Use the global output contract exactly. Report nothing outside your scope
 above, even if you notice it.
+
+Always include:
+- The untrusted input source.
+- The sink it reaches.
+- The specific control that is absent or removed that would have neutralized the issue.
+
+Do not include:
+- Speculative or hypothetical security issues without concrete evidence.
+- Internal implementation details unrelated to the security impact.

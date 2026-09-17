@@ -60,6 +60,61 @@ state, are both "who owns this and when does it end" bugs.
 - Do not report a TOCTOU race whose consequence is an authorization/security
   bypass — that is security-review's finding even though the mechanism is a
   race; you defer.
+- Do not report a resource acquired in a constructor/field initializer of a
+  class that itself implements `AutoCloseable`/`IDisposable`/`Closeable` (or
+  the language's equivalent) and exposes its own `close()`/`Dispose()` that
+  releases it — that is a legitimate ownership-transfer pattern, not a leak
+  in the class's own code. Judge the leak at the CALLER: only report it if a
+  construction site visible in this diff creates the object without a
+  try-with-resources/`using`/`with` (or equivalent guaranteed-close), and
+  attribute the finding to that caller's line, not to the class's field
+  declaration or constructor. Do not construct a leak scenario premised on
+  the resource's own ACQUISITION call failing (e.g. "what if
+  `pool.getConnection()` itself throws during field initialization, so
+  `close()` never gets a chance to run") — if the acquisition call throws,
+  no resource was ever acquired, so there is nothing to release; a failed
+  acquisition is not a leak, it's a no-op. Likewise, a child resource (a
+  `Statement`/`ResultSet` obtained from a `Connection`, a stream obtained
+  from a socket) that the diff shows being explicitly closed — whether
+  tracked and closed alongside its parent (e.g. in the same `close()`
+  method) or self-closing via a mechanism like JDBC's
+  `Statement.closeOnCompletion()` — is fully governed by the SAME rule as
+  the parent: do not report it as a second, separate leak on top of the
+  parent finding. Do not assume the reverse holds without evidence, though:
+  closing a Connection does not reliably close Statements/ResultSets it
+  created (this varies by driver, and a pooled connection's `close()` may
+  just return it to the pool) — a child resource genuinely left untracked
+  and unclosed anywhere in the class IS a real, reportable gap; the
+  exclusion above only covers a child the diff actually shows being closed,
+  one way or another. Do not invent a
+  "partial construction" window either — an argument that some OTHER field
+  initializer or constructor statement could throw after this resource is
+  acquired, leaving a half-built object whose `close()` never gets called —
+  unless that other initializer/statement is actually visible in this diff.
+  A class with exactly one resource-acquiring field and nothing else in its
+  body (e.g. a single `private final Connection conn = pool.getConnection();`
+  with no other fields or constructor code) has no such window: it either
+  finishes constructing, in which case ownership passes to the caller
+  (governed by the rule above), or the acquisition itself throws (already
+  excluded) — there is no third code path for a one-field class, so do not
+  report one that requires additional code the diff does not show.
+
+  WRONG (do not report this, at any severity, from this file alone):
+  Diff shows only `class ReportSession implements AutoCloseable { private
+  final Connection conn = pool.getConnection(); ResultSet run(String sql)
+  {...} public void close() throws SQLException { conn.close(); } }` — one
+  field, a working `close()`, no construction site in this diff.
+      [HIGH] ReportSession.java:2 — Resource leak: Connection acquired in
+      field initializer without guaranteed release
+      Impact: If an exception occurs before close() is called...
+
+  RIGHT for that exact diff:
+  No high-impact issues found.
+  (`close()` releases the connection correctly; there is no third code path
+  between "constructs successfully, ownership passes to the caller" and
+  "acquisition throws, nothing to release" for a one-field class. Judge the
+  leak at a CALLER's construction site if and only if this diff shows one
+  without a try-with-resources/`using`/`with`.)
 - Do not report generic "this could theoretically be called concurrently"
   without evidence the diff's calling context is actually concurrent
   (multiple threads, async fan-out, a web request handler, a shared

@@ -30,7 +30,9 @@ and persist the right result.
 - Migrations/schema: a migration that drops/alters a column or constraint
   without a safe backfill path, a migration that can silently truncate or
   null out existing data, a schema change that breaks an existing row's
-  invariants (nullable→non-null with no default for existing rows).
+  invariants (nullable→non-null with no default for existing rows). Strictly
+  directional — see Explicit exclusions for the widening and brand-new-table
+  carve-outs.
 - SQL correctness: a changed query that returns wrong rows (bad JOIN
   condition, off-by-one in a range filter, wrong aggregation grouping),
   a changed `UPDATE`/`DELETE` missing or newly missing a `WHERE` clause
@@ -61,8 +63,63 @@ and persist the right result.
   today — the finding is about correctness risk the structure creates, not
   a stand-alone maintainability opinion.
 
+  RIGHT (report this — do not let it slip past as "just duplication"):
+  Diff adds two new functions, `compute_checkout_total` and
+  `compute_invoice_total`, each independently implementing `if
+  order.customer.is_vip and order.total > 500: return order.total * 0.80`.
+      [MEDIUM] billing.py:8 — compute_invoice_total duplicates
+      compute_checkout_total's VIP-discount rule
+      Impact: the 20%-VIP-discount rule now exists in two places; a future
+      change to the threshold or rate that only updates one of them will
+      make checkout and invoicing silently disagree on the same order's
+      total.
+      Fix: extract the shared rule into one function (e.g.
+      apply_vip_discount) and have both call sites use it.
+  This is worth actively checking for whenever a diff adds two or more new
+  functions in the same area (billing, pricing, discounting, validation) —
+  read each one fully and compare their bodies, not just their names or
+  signatures, before concluding there's nothing to report.
+
 ## Explicit exclusions
 
+- WIDENING a column (`varchar(255)` → `varchar(320)`, a numeric precision
+  increase, non-null → nullable) cannot truncate or null out a single
+  existing row by itself — do not report it as a backfill/data-loss risk
+  just because it's an `AlterColumn`/`ALTER TABLE`; only the opposite
+  direction (narrowing a type, widening→non-null, adding a constraint
+  existing rows may violate) is a Migrations/schema risk.
+- A `CreateTable` for a brand-new table has zero existing rows to corrupt
+  or lose. A missing `NOT NULL`/primary key/constraint, or a column width/
+  type you consider too narrow, is a schema-design choice, not a data-loss
+  defect — categorically, not just "unless you can argue otherwise" —
+  unless this SAME diff also writes a row into that table whose value
+  violates the constraint or overflows the width. This bar does not move
+  no matter how you frame the argument: not by speculating about data
+  written LATER, not about a downstream consumer's assumptions, and not by
+  comparing the column to an external standard for what values of that
+  type can look like (e.g. "RFC 5321 allows emails longer than this," "some
+  real customer names exceed this length") — an external standard is not
+  evidence about this diff. The only evidence that counts is a write
+  statement inside THIS diff whose value provably exceeds the column's
+  width or violates its constraint; absent that, the choice is out of
+  scope, full stop.
+
+  WRONG (do not report this, at any severity):
+  Diff shows only `migrationBuilder.CreateTable(name: "StagingImports",
+  columns: table => new { BatchLabel = table.Column<string>(type:
+  "varchar(20)") });` — a brand-new table, no existing rows, no `NOT NULL`,
+  no write statement anywhere in the diff.
+      [HIGH] Migrations/...:3 — Column width insufficient / missing
+      NOT NULL constraint
+      Impact: Values longer than 20 characters will be silently
+      truncated on insert...
+
+  RIGHT for that exact diff:
+  No high-impact issues found.
+  (There is no existing row to corrupt, and no write in this diff to show
+  the width or nullability actually being violated — the column's design
+  is a choice for this diff's author to defend in review conversation, not
+  a defect this agent can substantiate from the diff alone.)
 - Do not report a query/calculation that was already wrong before this diff
   and is not touched or newly exercised by it.
 - Do not report generic "add more validation" advice — only a demonstrated
