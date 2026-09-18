@@ -3,6 +3,17 @@
 # any) -- this file only exists to keep ruff from flagging the one place
 # in the repo where "undefined name" and similar checks don't apply.
 
+# Without this, `extend-exclude` below only applies when ruff discovers
+# files by walking a directory (e.g. a bare `ruff check .`) -- it does NOT
+# apply to a path passed explicitly, which is exactly what an editor's
+# ruff integration does when it lints "the current file" (2026-09-18:
+# reported as a false-positive "`db` is not defined" on
+# tests/fixtures/security-review/boundary_case/handlers.py, which a
+# repo-wide `ruff check .` already skips correctly -- only linting that
+# one file directly reproduced it). force-exclude makes ruff honor
+# exclude/extend-exclude even for an explicitly-passed path.
+force-exclude = true
+
 extend-exclude = [
     # tests/fixtures/ holds the validation matrix from DESIGN.md Section E
     # as real source files -- deliberately incomplete snippets (undefined

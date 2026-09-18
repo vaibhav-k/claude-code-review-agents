@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+# isort:skip_file -- the sys.path.insert() calls below must run before the
+# agent_review/support imports that follow them; an import-sorting tool
+# (isort itself, or an editor's "organize imports" bound to save) doesn't
+# know that and will happily hoist them to the top AND, in doing so, drop
+# their trailing import-order-suppression comments -- caught 2026-09-18
+# when a reformatted copy of this file synced from a contributor's
+# machine turned out to fail `ruff check` with 6 real E402 errors that
+# this file's own checked-in version doesn't have. This directive tells
+# isort (however it's invoked) to leave this file's import order untouched.
 """CI/local harness for tests/fixtures/: runs every case in
 tests/fixtures/manifest.json through its target .claude/agents/*.md
 specialist -- the actual prompt files in THIS repo, loaded the same way
@@ -65,12 +74,12 @@ CLI_TESTS = REPO_ROOT / "cli" / "tests"
 sys.path.insert(0, str(CLI_SRC))
 sys.path.insert(0, str(CLI_TESTS))
 
-from agent_review import findings as findings_mod
-from agent_review.agents_client import AnthropicFoundryReviewer
-from agent_review.cli import _load_dotenv_if_present
-from agent_review.orchestrator import build_review_user_message
-from agent_review.prompts import AgentPrompt, load_agent_prompts
-from support.cassette import (
+from agent_review import findings as findings_mod  # noqa: E402
+from agent_review.agents_client import AnthropicFoundryReviewer  # noqa: E402
+from agent_review.cli import _load_dotenv_if_present  # noqa: E402
+from agent_review.orchestrator import build_review_user_message  # noqa: E402
+from agent_review.prompts import AgentPrompt, load_agent_prompts  # noqa: E402
+from support.cassette import (  # noqa: E402
     Cassette,
     CassetteMissError,
     CassetteReviewer,
@@ -104,6 +113,24 @@ def _diff_for_new_file(case_dir: Path, filename: str) -> str:
     bare filename -- matching how every EXPECTED.md refers to locations
     (e.g. "handlers.py:4", never a full nested fixture path) and how a
     real repo-relative diff would look in CI.
+
+    Line endings are normalized to `\\n` before this is embedded in a
+    cassette request key (2026-09-17 finding, see DESIGN.md's sixth real
+    `--live` run write-up). `--no-index` reads the working-tree file's raw
+    bytes directly and does NOT apply the repo's core.autocrlf/gitattributes
+    text filters the way a normal `git diff <ref>` would -- so on a
+    contributor's machine where autocrlf silently checks these fixture
+    files out as CRLF (invisible to `git status`/`diff`, which do apply
+    that filter), the diff text this function returns differs byte-for-byte
+    from what a LF checkout produces, even though the file's tracked
+    content is identical. request_key() hashes that diff text verbatim, so
+    an unnormalized CRLF checkout produces a DIFFERENT hash than an LF one
+    for the exact same logical fixture -- a cassette recorded via `--live`
+    on a CRLF checkout then silently fails to replay on an LF checkout (or
+    vice versa) with a misleading "No recorded response" miss, not an
+    error that points at line endings. Normalizing here makes the hash --
+    and therefore cassette replay -- independent of the checkout's line
+    ending style.
     """
     result = subprocess.run(
         ["git", "diff", "--no-index", "--", "/dev/null", filename],
@@ -114,7 +141,7 @@ def _diff_for_new_file(case_dir: Path, filename: str) -> str:
         stdin=subprocess.DEVNULL,
         check=False,  # --no-index exits 1 when there IS a difference -- expected
     )
-    return result.stdout
+    return result.stdout.replace("\r\n", "\n")
 
 
 def build_case_diff(case_dir: Path) -> tuple[str, list[str]]:
@@ -187,10 +214,7 @@ def _check_verdict(verdict: str, agent: str, raw_response: str) -> tuple[bool, s
         # catch, not paper over (see CLAUDE.md's Output Contract section).
         if stripped == findings_mod.NO_FINDINGS_TEXT:
             return True, "no finding, as expected"
-        return (
-            False,
-            f"expected exactly {findings_mod.NO_FINDINGS_TEXT!r}, got: {stripped[:200]!r}",
-        )
+        return False, f"expected exactly {findings_mod.NO_FINDINGS_TEXT!r}, got: {stripped[:200]!r}"
     return False, f"unknown verdict {verdict!r} in manifest.json"
 
 
@@ -206,9 +230,7 @@ def _seed_placeholders(manifest: list[dict[str, str]]) -> None:
             print(f"skip {agent_name}/{case}: no loaded prompt for {agent_name!r}")
             continue
         diff_text, filenames = build_case_diff(case_dir)
-        user_message = build_review_user_message(
-            f"Files: {', '.join(filenames)}", diff_text
-        )
+        user_message = build_review_user_message(f"Files: {', '.join(filenames)}", diff_text)
         key = request_key(agent.system_prompt, user_message)
         if cassette.get(key) is not None:
             continue  # never overwrite an existing (possibly real) entry
@@ -216,9 +238,7 @@ def _seed_placeholders(manifest: list[dict[str, str]]) -> None:
         if verdict in _MUST_FIRE_VERDICTS:
             block = _extract_expected_finding_block(expected_md)
             if block is None:
-                print(
-                    f"warn {agent_name}/{case}: must_fire but EXPECTED.md has no finding block to seed from"
-                )
+                print(f"warn {agent_name}/{case}: must_fire but EXPECTED.md has no finding block to seed from")
                 continue
             response = block
         else:
@@ -233,9 +253,7 @@ def _seed_placeholders(manifest: list[dict[str, str]]) -> None:
         "real prompt regression."
     )
     cassette.save()
-    print(
-        f"Seeded {seeded} new placeholder entries ({len(cassette)} total) into {CASSETTE_PATH}"
-    )
+    print(f"Seeded {seeded} new placeholder entries ({len(cassette)} total) into {CASSETTE_PATH}")
 
 
 def _filter_manifest_by_agent(
@@ -278,15 +296,11 @@ def _run_one_case(
     agent_name, case, verdict = entry["agent"], entry["case"], entry["verdict"]
     agent = prompts.get(agent_name)
     if agent is None:
-        return CaseResult(
-            agent_name, case, verdict, False, f"no loaded prompt for {agent_name!r}"
-        )
+        return CaseResult(agent_name, case, verdict, False, f"no loaded prompt for {agent_name!r}")
 
     case_dir = FIXTURES_DIR / agent_name / case
     diff_text, filenames = build_case_diff(case_dir)
-    user_message = build_review_user_message(
-        f"Files: {', '.join(filenames)}", diff_text
-    )
+    user_message = build_review_user_message(f"Files: {', '.join(filenames)}", diff_text)
     try:
         raw = reviewer.complete(agent.system_prompt, user_message)
     except CassetteMissError as exc:
@@ -334,9 +348,7 @@ def _summarize_results(results: list[CaseResult]) -> list[CaseResult]:
 
 
 def run(args: argparse.Namespace) -> int:
-    manifest: list[dict[str, str]] = json.loads(
-        MANIFEST_PATH.read_text(encoding="utf-8")
-    )
+    manifest: list[dict[str, str]] = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     filtered_manifest = _filter_manifest_by_agent(manifest, args.agent)
     if filtered_manifest is None:
         return 2
@@ -353,6 +365,20 @@ def run(args: argparse.Namespace) -> int:
     results = _run_all_cases(manifest, prompts, reviewer)
 
     if args.live:
+        # A full (unfiltered) --live run just called the real model for
+        # every case in the manifest, so any stale "seeded from
+        # EXPECTED.md, not live-recorded" note from an earlier
+        # --seed-placeholders-from-expected bootstrap no longer describes
+        # this cassette -- without this, that disclaimer persisted forever
+        # after the very first placeholder-seed, even once every entry had
+        # since been genuinely live-recorded (caught 2026-09-17 while
+        # investigating a cross-checkout cassette-replay mismatch: the
+        # cassette's own metadata was still claiming placeholder-only data
+        # after a real, fully-live 82-entry recording). A `--agent`-scoped
+        # run only refreshes a subset, so it leaves the note in place
+        # rather than claiming full coverage it didn't perform.
+        if args.agent is None:
+            cassette.set_meta(None)
         cassette.save()
         print(f"Recorded {len(cassette)} total cassette entries to {CASSETTE_PATH}\n")
 
@@ -369,13 +395,9 @@ def main() -> int:
     # cli.py: never overrides a variable already set in the real
     # environment, silently skipped if python-dotenv isn't installed.
     _load_dotenv_if_present()
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
-        "--agent",
-        default=None,
-        help="Only run cases for this agent (e.g. security-review).",
+        "--agent", default=None, help="Only run cases for this agent (e.g. security-review)."
     )
     parser.add_argument(
         "--live",
