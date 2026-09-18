@@ -3,11 +3,12 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.9.9] — 2026-09-17
+## [0.9.9] — 2026-09-17/18
 
 The sixth real `--live` run reported the first fully clean 23/23 — but
 independently replaying that cassette in a second checkout caught a real
-harness bug the celebration would otherwise have papered over. No agent
+bug the celebration would otherwise have papered over, plus a couple of
+smaller ones found while verifying the fix before committing it. No agent
 prompt changed in this release; the worked examples added through 0.9.7
 are untouched, per the standing instruction to hold off on any prompt
 trimming until a live run is confirmed to actually replay cleanly
@@ -15,27 +16,42 @@ everywhere, not just where it was recorded.
 
 ### Fixed
 
-- `scripts/validate_fixtures.py`'s `_diff_for_new_file()` shells out to
-  `git diff --no-index`, which reads a fixture's raw working-tree bytes and
-  — unlike a normal `git diff <ref>` — does not apply the repo's
-  `core.autocrlf`/`.gitattributes` text filters. On a checkout where
-  autocrlf silently converts these fixtures to CRLF on disk (invisible to
-  `git status`/`diff`, which do apply that filter), the diff text this
-  function returns — and therefore `request_key()`'s hash — differed
-  byte-for-byte from an LF checkout's, so a cassette recorded via `--live`
-  on one line-ending style silently failed to replay on the other with a
-  misleading "No recorded response" miss. Now normalizes `\r\n` → `\n`
-  before that text is ever hashed, making cassette replay independent of
-  which checkout produced it. See `DESIGN.md`'s sixth real `--live` run
-  write-up for the full investigation.
 - Two fixtures (`data-integrity-review/true_positive_structural/billing.py`,
   `security-review/boundary_case/handlers.py`) had each independently
   picked up one extra blank line before a top-level `def` — real content
-  drift, not just line-ending noise, almost certainly an editor's on-save
-  formatter applying PEP 8's two-blank-line convention the first time
-  either file was opened locally (`git log --follow` shows neither
-  touched since its original commit). Restored both to their originally
-  committed, single-blank-line content.
+  drift, not line-ending noise, almost certainly an editor's on-save
+  formatter applying PEP 8's two-blank-line convention the moment either
+  file was opened locally (`git log --follow` shows neither touched since
+  its original commit). That drift is what actually broke cassette replay
+  across checkouts — restored both to their originally committed,
+  single-blank-line content. It recurred once more while re-verifying
+  before handing off a commit-message list, confirming this is a
+  recurring local-formatter effect, not a one-off; restored again. See
+  `DESIGN.md`'s sixth real `--live` run write-up for the full
+  investigation, including a CRLF theory that looked plausible, got a
+  code fix shipped on its strength, and was then directly disproved by
+  testing before being written up as confirmed — `git diff --no-index`
+  turns out to already respect `core.autocrlf` for its blob-hash line, and
+  `subprocess.run(..., text=True)` already normalizes any raw `\r\n` in a
+  diff's body independent of git. That fix was reverted as a no-op with
+  the corrected explanation left in the code so it isn't silently
+  re-attempted later.
+- `ruff.toml`'s `extend-exclude` for `tests/fixtures/` (deliberately
+  incomplete snippets like `db.execute(...)` with no `db` defined
+  anywhere, not meant to pass static analysis) only applies when ruff
+  discovers files by walking a directory — it's silently bypassed when a
+  path is passed explicitly, which is exactly what an editor's ruff
+  extension does when linting "the current file." Reported as a
+  false-positive `db is not defined` on `security-review/boundary_case/
+  handlers.py`, which a repo-wide `ruff check .` already correctly
+  skipped. Added `force-exclude = true` so the exclusion applies either
+  way; verified against both the explicit-path and repo-wide cases.
+- A synced copy of `scripts/validate_fixtures.py` was found missing every
+  `# noqa: E402` comment on its post-`sys.path.insert` imports — would
+  have failed `ruff check` with 6 real errors. Almost certainly an
+  import-sorting tool (isort, or an editor's "organize imports" on save)
+  hoisting those imports and dropping their trailing comments in the
+  process. Added `# isort:skip_file` as a guard.
 - `run()`'s `--live` branch now clears a stale "seeded from EXPECTED.md,
   not live-recorded" cassette `_meta` note on a full (unfiltered) run —
   previously it was set once by the first `--seed-placeholders-from-expected`
@@ -44,14 +60,21 @@ everywhere, not just where it was recorded.
   recording. A `--agent`-scoped run still leaves it in place, since that
   run doesn't cover the whole cassette.
 
+### Changed
+
+- `cli/pyproject.toml`: adopted the author email added independently on
+  the maintainer's machine, so neither copy overwrites the other going
+  forward.
+
 ### Confirmed
 
-A follow-up `--live` run (same Windows checkout, now with this fix and
-both restored fixtures in place) again reported 23/23, and the resulting
-84-entry cassette replays 23/23 independently on a second (Linux, LF)
-checkout with zero changes on that side — the first cross-checkout-
-reproducible clean pass in this project's history. Committed as
-`tests/fixtures/cassettes.json`.
+A follow-up `--live` run (same Windows checkout, with both fixtures
+restored) reported 23/23, and the resulting 84-entry cassette replays
+23/23 independently on a second (Linux, LF) checkout with zero changes on
+that side — the first cross-checkout-reproducible clean pass in this
+project's history. Committed as `tests/fixtures/cassettes.json`. All of
+`pytest`, `ruff` (both configs), `mypy`, and `pyright` are clean on both
+checkouts as of this entry.
 
 ## [0.9.8] — 2026-09-17
 

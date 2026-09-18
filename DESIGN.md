@@ -210,7 +210,6 @@ def compute_checkout_total(order):
         return order.total * 0.80
     return order.total
 
-
 def compute_invoice_total(order):
     # copy-pasted from compute_checkout_total when invoicing was added
     if order.customer.is_vip and order.total > 500:
@@ -442,12 +441,9 @@ def compute_discount(order):
         return order.total * 0.20
     return order.total * 0.05
 
-
 # test_discounts.py (same diff)
 def test_vip_discount_over_500():
     assert compute_discount(make_order(vip=True, total=600)) == 120
-
-
 def test_non_vip_discount():
     assert compute_discount(make_order(vip=False, total=600)) == 30
 ```
@@ -1405,7 +1401,7 @@ boundary_case` before it — the underlying fixtures themselves need to
 change because the model's trained instinct on N+1-shaped loops and
 boundary-test skepticism is simply too strong to fully suppress in-context.
 
-### Sixth real `--live` run (2026-09-17): a genuine 23/23, and a cross-checkout reproducibility bug it exposed
+### Sixth real `--live` run (2026-09-17/18): a genuine 23/23, a real fixture-drift bug, and a CRLF theory that didn't survive testing
 
 The sixth run reported **23/23 — the first fully clean pass across six
 rounds**, including the two cases round 5 flagged as likely stochastic
@@ -1420,70 +1416,93 @@ cassette gets looked up afterward can retroactively make that run's verdicts
 any less genuine.
 
 What it does not automatically mean is that this repo's cassette now
-*replays* 23/23 in every environment, and checking that turned up a real,
-previously-invisible bug in the harness itself — not in any agent's prompt,
-and not in a fixture's expected behavior.
+*replays* 23/23 in every environment, and checking that turned up a real
+bug — not in any agent's prompt, and not in a fixture's expected behavior.
 
 **The bug.** Syncing the freshly-recorded `cassettes.json` (82 entries) into
 a second checkout and running plain (non-`--live`) replay produced 22/23,
 failing only on `data-integrity-review/true_positive_structural` with "No
 recorded response for 'billing.py'" — a hash miss, even though the cassette
 plainly contained a `billing.py` entry matching the sixth run's own reported
-finding text. Comparing the two checkouts' fixture files byte-for-byte found
-the cause: `_diff_for_new_file()` (`scripts/validate_fixtures.py`) shells out
-to `git diff --no-index`, which reads the working-tree file's raw bytes
-directly and — unlike a normal `git diff <ref>`, which does — does **not**
-apply the repository's `core.autocrlf`/`.gitattributes` text-conversion
-filters. On a Windows checkout with `core.autocrlf` converting these text
-fixtures to CRLF on disk (invisible to `git status`/`diff`, which apply that
-same filter and see the tracked LF content as unchanged), `--no-index`
-still sees the raw CRLF bytes. `request_key()` hashes the diff text verbatim,
-so the same logical fixture hashes differently depending on which checkout
-built the diff — a CRLF checkout's `--live` recording can never replay on an
-LF checkout, or vice versa, and the failure mode is a misleading "never
-recorded" rather than anything pointing at line endings.
+finding text. `security-review/boundary_case/handlers.py` turned out to have
+the identical problem lying in wait, just not on a case whose manifest entry
+happened to be exercised the same way that round.
 
-A full sweep of all 26 non-`EXPECTED.md` fixture files against a second
-checkout found this CRLF conversion present in effectively all of them —
-a repo-wide, invisible-to-git checkout property, not something specific to
-`billing.py`. Two files (`data-integrity-review/true_positive_structural/
-billing.py`, `security-review/boundary_case/handlers.py`) had also
-independently picked up one extra blank line before their top-level `def`
-each — identical in both files, consistent with an editor's on-save
-formatter applying PEP 8's two-blank-line convention the moment either file
-was ever opened locally, not a deliberate edit (`git log --follow` shows
-neither file touched since its original fixture commit). That extra line
-is a real content drift, not just line-ending noise, and shifts the
-line numbers `EXPECTED.md` names for both cases.
+**First theory, tested and disproved.** The first hypothesis was line
+endings: `_diff_for_new_file()` (`scripts/validate_fixtures.py`) shells out
+to `git diff --no-index`, and the Windows checkout genuinely does have
+`core.autocrlf` converting these fixture files to CRLF on disk (confirmed by
+staging and byte-comparing all 26 non-`EXPECTED.md` fixture files against
+the Linux checkout — effectively all of them showed CRLF). The plausible
+theory was that `--no-index` bypasses `core.autocrlf`'s normalization the
+way a normal `git diff <ref>` wouldn't, so a CRLF checkout would hash a
+different diff than an LF one for the identical logical file. Directly
+testing this — a throwaway repo, a pure line-ending difference with zero
+content change, `--no-index` diffed both with and without `core.autocrlf`
+configured — showed the theory doesn't hold: `subprocess.run(...,
+text=True)` (used by both `_diff_for_new_file()` and the production
+`git_utils.diff_for_file()`) already normalizes any `\r\n` in the diff body
+on the Python side regardless of git, and `git diff --no-index` itself
+*does* apply `core.autocrlf` when computing the new-file blob hash in its
+`index 0000000..<hash>` line — a pure line-ending difference (autocrlf
+configured, which is the common Windows case) produces byte-identical diff
+text either way. A code change was shipped anyway on the strength of the
+theory (normalizing `\r\n` in the returned diff text) before this testing
+happened; once it did, that change was confirmed to be a no-op — harmless,
+but not what fixed anything — and was reverted with the corrected
+explanation left in its place so the theory doesn't get silently retested
+by a future contributor. Recorded here as a specific instance of this
+project's own stated principle in `CONTRIBUTING.md`: verify a theory
+against real behavior before writing the fix up as confirmed, not just
+after it happens to make the numbers go to 23/23.
 
-**The fix.** `_diff_for_new_file()` now normalizes `\r\n` → `\n` in the diff
-text it returns, before that text is ever hashed or embedded in a cassette
-key — making the hash, and therefore cassette replay, independent of which
-checkout's line-ending behavior built it. Both drifted fixture files were
-restored to their originally-committed, single-blank-line content. Neither
-change touches an agent's prompt — the worked examples added across rounds
-2-5 are untouched, consistent with holding off on any prompt edits until a
-live run is confirmed to actually replay cleanly everywhere, not just where
-it was recorded. `run()`'s `--live` branch also now clears a stale
-"seeded from EXPECTED.md, not live-recorded" `_meta` note on a full
-(unfiltered) run — a smaller bug found alongside the main one: that note
-was set once by the very first `--seed-placeholders-from-expected` bootstrap
-and then persisted forever, including after this sixth run's fully-live
-82-entry recording, because no code path ever cleared it.
+**The actual bug.** Two fixture files
+(`data-integrity-review/true_positive_structural/billing.py`,
+`security-review/boundary_case/handlers.py`) had each independently picked
+up one extra blank line before a top-level `def` — genuine content drift,
+not a line-ending artifact, confirmed by isolating line-endings from
+content in the same throwaway-repo test above (identical CRLF styling,
+only one file with the extra line, produces a real diff-text and
+blob-hash difference; identical content with only line-endings differing
+produces none). Consistent with an editor's on-save formatter applying
+PEP 8's two-blank-line convention the moment either file was opened
+locally, not a deliberate edit (`git log --follow` shows neither file
+touched since its original fixture commit). That extra line shifts the
+line number `EXPECTED.md` names for both cases and is what actually broke
+the hash.
 
-**Confirmed.** A follow-up `--live` run from the same Windows checkout, now
-with the harness fix and both restored fixtures in place, again reported
-23/23 — and this time the resulting 84-entry cassette replayed 23/23
-independently in a second (Linux, LF) checkout with no fixture or code
-changes on that side, the first time in this project's history that a
-live-recorded cassette has replayed identically across two different
-checkouts' line-ending conventions. `billing.py`'s finding now reports
-line 6 (matching the restored single-blank-line file) instead of the
-line 8 the drifted extra-blank-line version produced. This is the
-strongest evidence yet — genuinely reproducible, not just self-reported —
-that every worked-example fix through round 5 holds under live sampling,
-on top of a harness bug that would otherwise have kept silently producing
-environment-dependent cassettes indefinitely.
+**The fix.** Both drifted fixture files were restored to their
+originally-committed, single-blank-line content. `run()`'s `--live` branch
+also now clears a stale "seeded from EXPECTED.md, not live-recorded"
+`_meta` note on a full (unfiltered) run — a smaller, unrelated bug found
+alongside the main investigation: that note was set once by the very first
+`--seed-placeholders-from-expected` bootstrap and then persisted forever,
+including after this sixth run's fully-live 82-entry recording, because no
+code path ever cleared it. Neither fix touches an agent's prompt — the
+worked examples added across rounds 2-5 are untouched, consistent with
+holding off on any prompt edits until a live run is confirmed to actually
+replay cleanly everywhere, not just where it was recorded.
+
+**Confirmed, then re-drifted, then confirmed again.** A follow-up `--live`
+run from the same Windows checkout, with both fixtures restored, reported
+23/23, and the resulting 84-entry cassette replayed 23/23 independently in
+the Linux checkout with no changes needed there — the first time in this
+project's history a live-recorded cassette replayed identically across two
+different checkouts. Re-verifying before handing off a commit-message list
+caught the same two files drifting back to the extra-blank-line form a
+second time (confirming this is a recurring, not one-off, local formatter
+effect) and, separately, a synced copy of `scripts/validate_fixtures.py`
+missing every `# noqa: E402` comment — almost certainly an import-sorting
+tool (isort, or an editor's "organize imports" on save) hoisting the
+post-`sys.path.insert` imports and dropping their trailing comments, which
+would have failed `ruff check` with 6 real errors. Fixed by re-restoring
+both fixtures and adding `# isort:skip_file` to the script as a guard.
+`git status` on the fixtures shows nothing after each restore, since git's
+own `core.autocrlf`-normalized view of these files already matches the
+committed LF/single-blank-line content — the drift is purely a working-tree
+artifact of whatever's touching these files locally, invisible to git
+itself, which is exactly why it kept resurfacing silently instead of
+showing up as a pending change to commit.
 
 ### Structured output, budget management, and the feedback loop (implemented in 0.9.0)
 
