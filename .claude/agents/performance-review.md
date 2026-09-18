@@ -67,7 +67,8 @@ theoretical performance concerns with no evidence of scale.
   like the fixed-size comment in the N+1 example above — take it at face
   value unless something else in the diff contradicts it.
 - Do not report a performance characteristic that existed before this diff
-  and is untouched by it.
+  and is untouched by it (see CLAUDE.md's Evidence Bar: causal-link
+  requirement).
 - Do not report micro-optimizations (string concatenation style, minor
   allocation differences, choice between equivalent-complexity constructs)
   with no measured or structurally evident material impact.

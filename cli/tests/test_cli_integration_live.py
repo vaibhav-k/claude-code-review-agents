@@ -35,8 +35,24 @@ import pytest
 from support.cassette import Cassette, CassetteReviewer, RecordingReviewer
 
 from agent_review.cache import AgentCache
+from agent_review.cli import _load_dotenv_if_present as _real_load_dotenv_if_present
 from agent_review.orchestrator import run_review
 from agent_review.prompts import load_agent_prompts
+
+# Captured here, at module import time, so this is a direct reference to
+# the real function -- same technique test_cli_dotenv.py's own module
+# docstring describes. conftest.py's `_no_real_dotenv_lookup` autouse
+# fixture monkeypatches the `cli` module's `_load_dotenv_if_present`
+# ATTRIBUTE (correctly, for every ordinary replay test in this suite,
+# which must not depend on whatever happens to be in a dev's real .env).
+# But `reviewer_and_cassette`'s recording branch is the one place in this
+# suite that explicitly wants real credentials -- that's the entire point
+# of AGENT_REVIEW_RECORD_LIVE=1 -- so it calls this captured reference
+# directly, bypassing the monkeypatch, instead of going through
+# `cli._load_dotenv_if_present` again (2026-09-18 finding: without this,
+# recording mode silently requires every ANTHROPIC_FOUNDRY_* variable to
+# be exported by hand in the current shell every time, even when a working
+# `cli/.env` already exists on disk).
 
 CASSETTE_PATH = Path(__file__).resolve().parent / "cassettes" / "integration.json"
 RECORD_ENV_VAR = "AGENT_REVIEW_RECORD_LIVE"
@@ -82,6 +98,14 @@ def reviewer_and_cassette():
     """
     cassette = Cassette(CASSETTE_PATH)
     if os.environ.get(RECORD_ENV_VAR):
+        # Load real credentials from cli/.env (if present) before touching
+        # anything Foundry-related, exactly like `agent-review`'s own CLI
+        # entry points and scripts/validate_fixtures.py --live already do.
+        # Never overrides a variable already set in the real environment
+        # (see _load_dotenv_if_present's own docstring) -- an explicit
+        # export still wins, this just removes the need for one.
+        _real_load_dotenv_if_present()
+
         from agent_review.agents_client import AnthropicFoundryReviewer  # noqa: PLC0415
         # -- deliberately deferred, same reasoning as agents_client.py's own
         # lazy `anthropic`/`azure.identity` imports: keeps a missing
