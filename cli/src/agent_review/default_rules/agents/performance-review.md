@@ -39,7 +39,9 @@ theoretical performance concerns with no evidence of scale.
   buffer, list, or accumulator with no size cap or eviction that grows with
   request volume or input size the diff makes reachable (distinct from
   concurrency-resource-review's leak scope: here the data structure itself
-  is doing what it's told, just growing without bound by design).
+  is doing what it's told, just growing without bound by design). See
+  Explicit exclusions for when a memoization cache's key space counts as
+  bounded.
 - Batch/pagination regressions: a changed default page size, batch size, or
   removal of pagination that causes a single call to now load or process an
   unbounded or drastically larger amount of data than before.
@@ -51,6 +53,19 @@ theoretical performance concerns with no evidence of scale.
 
 ## Explicit exclusions
 
+- A check-then-set memoization dict (`if key not in _cache: _cache[key] =
+  ...`) is only a finding if THIS diff shows a concrete code path that lets
+  `key` take arbitrarily many distinct values (e.g. `key` parsed straight
+  from free-text request input with no length/cardinality limit anywhere in
+  the diff). Absence of a visible size cap is neutral, not evidence of
+  unboundedness. If the diff shows only the cache's own definition with no
+  caller populating it, there is by definition no evidence of what values
+  the key takes — do not reach outside the diff for a plausible-sounding
+  caller to complete the argument. A comment, docstring, or parameter name
+  in the diff that states or implies a fixed, small domain (a config-name
+  enum, a handful of feature flags) is evidence of boundedness, exactly
+  like the fixed-size comment in the N+1 example above — take it at face
+  value unless something else in the diff contradicts it.
 - Do not report a performance characteristic that existed before this diff
   and is untouched by it.
 - Do not report micro-optimizations (string concatenation style, minor
@@ -58,7 +73,29 @@ theoretical performance concerns with no evidence of scale.
   with no measured or structurally evident material impact.
 - Do not report a slow algorithm operating on a demonstrably small, bounded
   input (a fixed-size config list, a handful of enum values) — complexity
-  only matters when the input can actually grow.
+  only matters when the input can actually grow. Take a comment, docstring,
+  or parameter name in the diff that states a fixed size at face value
+  unless something else in the same diff contradicts it.
+
+  WRONG (do not report this, at any severity — acknowledging the count is
+  fixed and flagging it anyway is still wrong):
+  Diff shows only `def get_top3_summaries(top3_ids): # top3_ids is always
+  exactly the 3 leaderboard positions\n    return [db.query(Order).filter
+  (Order.id == oid).first().total for oid in top3_ids]`.
+      [HIGH] leaderboard.py:3 — N+1 query pattern in loop over fixed
+      collection
+      Impact: Issues one database query per leaderboard position (3
+      total) instead of a single batched query...
+
+  RIGHT for that exact diff:
+  No high-impact issues found.
+  (The loop shape pattern-matches N+1 at a glance, but the diff's own
+  comment states the count is fixed at exactly 3 — the code IS doing an
+  N+1-shaped thing, and that is still not reportable: batching 3 fixed
+  lookups saves nothing meaningful, and there is no evidence anywhere in
+  this diff that the count can ever be more than 3. Recognizing the shape
+  is not the same as it being a material regression — material requires a
+  size that can actually grow, which this diff explicitly rules out.)
 - Do not report the CORRECTNESS of a query (wrong rows) — that's
   data-integrity-review's domain; you only own how expensive it is to run.
 - Do not report resource leaks or unbounded growth caused by a MISSING

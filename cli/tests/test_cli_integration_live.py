@@ -1,5 +1,4 @@
-"""
-Opt-in integration test for the CLI's own orchestrator against a
+"""Opt-in integration test for the CLI's own orchestrator against a
 *realistic* model response, not the fully scripted FakeReviewer
 test_cli_integration.py uses.
 
@@ -84,7 +83,6 @@ def reviewer_and_cassette():
     cassette = Cassette(CASSETTE_PATH)
     if os.environ.get(RECORD_ENV_VAR):
         from agent_review.agents_client import AnthropicFoundryReviewer  # noqa: PLC0415
-
         # -- deliberately deferred, same reasoning as agents_client.py's own
         # lazy `anthropic`/`azure.identity` imports: keeps a missing
         # `anthropic` package (or unset Foundry credentials) from breaking
@@ -93,6 +91,15 @@ def reviewer_and_cassette():
 
         reviewer = RecordingReviewer(cassette, AnthropicFoundryReviewer())
         yield reviewer
+        # Same bug (and same fix) as scripts/validate_fixtures.py's `run()`:
+        # a stale "hand-authored, not live-recorded" _meta note from the
+        # original placeholder seed persisted forever because nothing ever
+        # cleared it, even after this fixture recorded genuine live
+        # responses (2026-09-18 finding). Every test in this file runs
+        # through this fixture, so a recording run always exercises the
+        # whole cassette -- no `--agent`-style partial-run case to guard
+        # against here the way the bigger fixture harness has.
+        cassette.set_meta(None)
         cassette.save()
     else:
         yield CassetteReviewer(cassette)
@@ -109,11 +116,7 @@ def test_run_review_finds_the_injection_and_clears_the_safe_query(reviewer_and_c
     cache = AgentCache(repo)
 
     run = run_review(
-        repo,
-        base_ref=None,
-        prompts=prompts,
-        cache=cache,
-        reviewer=reviewer_and_cassette,
+        repo, base_ref=None, prompts=prompts, cache=cache, reviewer=reviewer_and_cassette
     )
 
     by_path = {f.path: f for f in run.files}
@@ -134,11 +137,7 @@ def test_second_run_is_a_pure_cache_hit_with_no_further_reviewer_calls(
 
     cache1 = AgentCache(repo)
     run1 = run_review(
-        repo,
-        base_ref=None,
-        prompts=prompts,
-        cache=cache1,
-        reviewer=reviewer_and_cassette,
+        repo, base_ref=None, prompts=prompts, cache=cache1, reviewer=reviewer_and_cassette
     )
     assert run1.cache_misses == 1
 
@@ -147,11 +146,7 @@ def test_second_run_is_a_pure_cache_hit_with_no_further_reviewer_calls(
     # identically whether reviewer_and_cassette is in replay or record mode.
     cache2 = AgentCache(repo)
     run2 = run_review(
-        repo,
-        base_ref=None,
-        prompts=prompts,
-        cache=cache2,
-        reviewer=reviewer_and_cassette,
+        repo, base_ref=None, prompts=prompts, cache=cache2, reviewer=reviewer_and_cassette
     )
     assert run2.cache_hits == 1
     assert run2.cache_misses == 0

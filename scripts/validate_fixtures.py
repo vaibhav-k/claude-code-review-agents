@@ -114,23 +114,24 @@ def _diff_for_new_file(case_dir: Path, filename: str) -> str:
     (e.g. "handlers.py:4", never a full nested fixture path) and how a
     real repo-relative diff would look in CI.
 
-    Line endings are normalized to `\\n` before this is embedded in a
-    cassette request key (2026-09-17 finding, see DESIGN.md's sixth real
-    `--live` run write-up). `--no-index` reads the working-tree file's raw
-    bytes directly and does NOT apply the repo's core.autocrlf/gitattributes
-    text filters the way a normal `git diff <ref>` would -- so on a
-    contributor's machine where autocrlf silently checks these fixture
-    files out as CRLF (invisible to `git status`/`diff`, which do apply
-    that filter), the diff text this function returns differs byte-for-byte
-    from what a LF checkout produces, even though the file's tracked
-    content is identical. request_key() hashes that diff text verbatim, so
-    an unnormalized CRLF checkout produces a DIFFERENT hash than an LF one
-    for the exact same logical fixture -- a cassette recorded via `--live`
-    on a CRLF checkout then silently fails to replay on an LF checkout (or
-    vice versa) with a misleading "No recorded response" miss, not an
-    error that points at line endings. Normalizing here makes the hash --
-    and therefore cassette replay -- independent of the checkout's line
-    ending style.
+    2026-09-17/18 correction: an earlier revision of this function
+    normalized `\\r\\n` to `\\n` here, on the theory that `--no-index`
+    bypasses core.autocrlf and so a CRLF checkout would hash differently
+    than an LF one for the same logical fixture. Directly tested and
+    disproved that theory before it shipped further: `subprocess.run(...,
+    text=True)` already normalizes any `\\r\\n` in the diff body on the
+    Python side regardless of git, and `git diff --no-index` itself
+    applies core.autocrlf when computing the new-file blob hash in its
+    `index 0000000..<hash>` line, so a pure line-ending difference
+    (autocrlf configured or not) produces byte-identical diff text either
+    way -- verified with a throwaway repo in both configurations. The
+    actual cross-checkout mismatch that prompted this investigation
+    (`data-integrity-review/true_positive_structural`) turned out to be a
+    real, boring content drift: two fixture files had each independently
+    picked up one extra blank line before a top-level `def`, most likely
+    from a contributor's on-save formatter -- see DESIGN.md's sixth real
+    `--live` run write-up for the corrected account. Left as a plain
+    `git diff --no-index` call, no normalization needed.
     """
     result = subprocess.run(
         ["git", "diff", "--no-index", "--", "/dev/null", filename],
@@ -141,7 +142,7 @@ def _diff_for_new_file(case_dir: Path, filename: str) -> str:
         stdin=subprocess.DEVNULL,
         check=False,  # --no-index exits 1 when there IS a difference -- expected
     )
-    return result.stdout.replace("\r\n", "\n")
+    return result.stdout
 
 
 def build_case_diff(case_dir: Path) -> tuple[str, list[str]]:

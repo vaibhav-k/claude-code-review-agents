@@ -1,19 +1,35 @@
 {
-  "4a7896a2fd41350f906255ab1151edcf3e4fd6bdbcf201a210466e4df6f75bf0": {
-    "label": "safe_handlers.py / performance-review",
+  "454de795696b68c4a159cd83c824904ad5e8e73da05d793d0d07632427e45300": {
+    "label": "safe_handlers.py",
     "response": "No high-impact issues found."
+  },
+  "4a7896a2fd41350f906255ab1151edcf3e4fd6bdbcf201a210466e4df6f75bf0": {
+    "label": "safe_handlers.py",
+    "response": "No high-impact issues found."
+  },
+  "4d8272a36416c8071c544aa07697089f2514b1286f50181c8a316b89567742fe": {
+    "label": "safe_handlers.py",
+    "response": "No high-impact issues found."
+  },
+  "57cc8cd3012cef4f25f49b3a11621fa84adfe05b20ce447c8194abe5fa4fa084": {
+    "label": "handlers.py",
+    "response": "[CRITICAL] handlers.py:2 \u2014 SQL injection via unsanitized string interpolation\nImpact: user-controlled user_id is interpolated directly into a SQL query string, allowing arbitrary SQL injection.\nFix: use a parameterized query, e.g. query = \"SELECT * FROM users WHERE id = %s\"; db.execute(query, (user_id,))."
   },
   "770a9177c497f841ebb51a7109f81f43fa4542de2d315fcd89f313d3c7175f3c": {
-    "label": "handlers.py / security-review",
-    "response": "[HIGH] handlers.py:2 \u2014 SQL injection via f-string interpolation\nImpact: user_id flows directly into the query string, letting an attacker alter the query's structure and read or modify data outside the intended row.\nFix: use a parameterized query, e.g. db.execute(\"SELECT * FROM users WHERE id = %s\", (user_id,)).\n"
+    "label": "handlers.py",
+    "response": "```\n[CRITICAL] handlers.py:2 \u2014 SQL injection via unsanitized request parameter\nImpact: User-controlled input from get_request_id() is directly interpolated into a SQL query string, allowing an attacker to inject arbitrary SQL commands (e.g., UNION-based data exfiltration, authentication bypass, or data modification).\nFix: Replace the f-string with a parameterized query: query = \"SELECT * FROM users WHERE id = ?\"; result = db.execute(query, (user_id,)).fetchone()\n```"
   },
-  "_meta": "Placeholder responses hand-authored from the fixture's expected verdicts, NOT recorded from a live Foundry call (no Foundry credentials in the environment that built this cassette). Re-seeded 2026-09-17 after orchestrator.build_review_user_message() and several agent prompts changed (a real --live run against tests/fixtures/ surfaced live-model gaps this same change targets -- see CHANGELOG.md); the request keys below reflect the new prompt/message text, but the response TEXT is still hand-authored, not live-verified. Refresh with AGENT_REVIEW_RECORD_LIVE=1 (real ANTHROPIC_FOUNDRY_* secrets required) before trusting this for real prompt-regression detection, then commit the diff.",
+  "_meta": "Re-seeded 2026-09-18 with hand-authored placeholders after syncing cli/src/agent_review/default_rules/ to the current, live-tuned root CLAUDE.md/.claude/agents/ prompts (see test_default_rules_sync.py) -- the request keys reflect the corrected bundled prompt text, but this response TEXT is NOT live-recorded. Refresh with AGENT_REVIEW_RECORD_LIVE=1 pytest cli/tests/test_cli_integration_live.py (real ANTHROPIC_FOUNDRY_* credentials required) before trusting this for real prompt-regression detection, then commit the diff.",
   "b56cd0396fd10b11d868ca473d6b1ca6d75bdbfc9a54b99d8f4bd8fa881a70e9": {
-    "label": "handlers.py / performance-review",
-    "response": "No high-impact issues found."
+    "label": "handlers.py",
+    "response": "[CRITICAL] handlers.py:2 \u2014 SQL injection via unsanitized string interpolation\nImpact: Attacker-controlled `user_id` can inject arbitrary SQL, compromising data confidentiality, integrity, and availability.\nFix: Use parameterized query: `query = \"SELECT * FROM users WHERE id = ?\"` and pass `user_id` as a parameter to `db.execute(query, (user_id,))`."
   },
   "ce2b3d99f06716feaa0a8edf4e9cd285768b95672855611ad5730b3994d8bb0d": {
-    "label": "safe_handlers.py / security-review",
+    "label": "safe_handlers.py",
+    "response": "No high-impact issues found."
+  },
+  "fecf0bbd7ae660f2033574d14dc43bbd955ef0bda6b63df0e102dba0728b096f": {
+    "label": "handlers.py",
     "response": "No high-impact issues found."
   }
 }
