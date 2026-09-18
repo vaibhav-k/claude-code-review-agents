@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-review"
-version = "0.9.8"
+version = "0.9.9"
 description = "Evidence-based automated code review, staged-diff commit messages, and guarded self-healing for any git repository. Talks to Claude exclusively via Microsoft Foundry (Azure AI Foundry)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Vaibhav Kulshrestha" }]
+authors = [{ name = "Vaibhav Kulshrestha", email = "vaibhav1kulshrestha@gmail.com" }]
 dependencies = [
     # 0.74.0 is the first release with the AnthropicFoundry client class
     # (Microsoft Foundry / Azure AI Foundry support) this project depends
