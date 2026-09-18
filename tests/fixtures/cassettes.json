@@ -11,13 +11,17 @@
     "label": "test_discounts.py",
     "response": "[MEDIUM] test_discounts.py:3 - Added test asserts a tautology and cannot detect a regression\nImpact: this test will pass regardless of what compute_discount returns, giving false confidence that the VIP-discount branch is covered when it is not.\nFix: assert against the expected literal value, e.g. assert result == 120."
   },
+  "1197d18bb83c8387ee02eca0aa09d15111d98a129ee6a60bc0335a8133a05078": {
+    "label": "billing.py",
+    "response": "[MEDIUM] billing.py:6 \u2014 compute_invoice_total duplicates compute_checkout_total's VIP-discount rule\nImpact: the 20%-VIP-discount rule now exists in two places; a future change to the threshold or rate that only updates one of them will make checkout and invoicing silently disagree on the same order's total.\nFix: extract the shared rule into one function (e.g. apply_vip_discount) and have both call sites use it."
+  },
   "1957a5a64bd680489ab04ba37633d0c4930109d54eb7e4447546032ec173f38f": {
     "label": "leaderboard.py",
     "response": "[HIGH] leaderboard.py:3 \u2014 N+1 query pattern in loop over fixed collection\nImpact: Issues one database query per leaderboard position (3 total) instead of a single batched query, multiplying round-trip latency and connection overhead.\nFix: Replace the list comprehension with a single `db.query(Order).filter(Order.id.in_(top3_ids)).all()` call, then map results by ID to preserve order if needed."
   },
   "19819d74c8bce230346d934e3c1b86fcfd0e28a5c746300760fc168bf5326325": {
     "label": "test_jobs.py",
-    "response": "[HIGH] test_jobs.py:3 \u2014 Test uses fixed sleep instead of waiting on job completion\nImpact: The test is flaky by construction \u2014 if the worker takes longer than 0.5 seconds (under load, resource contention, or CI slowness), the test fails despite correct implementation; conversely, if the worker is faster, the sleep masks timing bugs that would surface in production.\nFix: Replace `time.sleep(0.5)` with a polling loop that checks `get_job_status(\"123\")` in a tight retry-with-backoff pattern until it returns \"complete\" or a timeout is exceeded, so the test passes as soon as the job genuinely completes.\n\n[MEDIUM] test_jobs.py:1 \u2014 New test does not exercise error or edge-case paths\nImpact: Only the happy path (job submitted and completes) is tested; no coverage for job submission failure, worker crash, timeout, or job not found \u2014 the most likely real-world failure modes are invisible to this test.\nFix: Add separate tests for at least: (1) `submit_job` raising an exception or returning an error status, and (2) `get_job_status` called on a non-existent job ID, to ensure error handling is not regressed."
+    "response": "[HIGH] test_jobs.py:3 \u2014 Test uses fixed sleep instead of waiting on condition\nImpact: the test is flaky by construction \u2014 if the worker takes longer than 0.5 seconds (network delay, system load, concurrent test run contention), the assertion will fail on a correct implementation, causing intermittent CI failures and false alarms.\nFix: replace `time.sleep(0.5)` with a polling loop or a test helper that waits on `get_job_status(\"123\")` to return \"complete\" (e.g. `wait_for_condition(lambda: get_job_status(\"123\") == \"complete\", timeout=5)`) so the test only proceeds once the actual condition is met.\n\n[MEDIUM] test_jobs.py:2 \u2014 New test does not verify cleanup or isolation\nImpact: `submit_job(\"123\")` may leave state (a job record, a queue entry, or a background task) that leaks into subsequent tests, causing them to fail or pass incorrectly depending on execution order.\nFix: add a fixture or teardown that cleans up job \"123\" after the test completes (e.g. `delete_job(\"123\")` in a finally block or a pytest fixture with `yield`)."
   },
   "1e51764cc0cda69efade9a40835a575e95de1e7e85136f1d62bcc142c5f3d7d7": {
     "label": "Db.java",
@@ -29,7 +33,7 @@
   },
   "24c57826d9d50a006a847e94eba0629f5ae317722a7e84d156b3f038372ce965": {
     "label": "Db.java",
-    "response": "[CRITICAL] Db.java:2 \u2014 Resource leak: Connection, PreparedStatement, and ResultSet acquired without guaranteed release\nImpact: All three resources (conn, ps, rs) are never closed, causing connection pool exhaustion and potential unbounded resource accumulation on every invocation.\nFix: Wrap all resource allocations in a try-with-resources block: `try (Connection conn = pool.getConnection(); PreparedStatement ps = conn.prepareStatement(...)) { ResultSet rs = ps.executeQuery(); return rs.next() ? rs.getString(1) : null; }`\n\n[HIGH] Db.java:5 \u2014 ResultSet used without null-check after iteration\nImpact: If `rs.next()` returns false, `rs.getString(1)` is never called, but if it returns true, the code consumes only one row and closes the implicit cursor without explicit cleanup; however, the larger issue is that rs is never closed on the true branch either.\nFix: Ensure rs is closed explicitly on all paths by including it in the try-with-resources (PreparedStatement.closeOnCompletion() closes the ResultSet, but explicit closure via try-with-resources is clearer and safer)."
+    "response": "[CRITICAL] Db.java:2 \u2014 Resource leak: Connection, PreparedStatement, and ResultSet never closed\nImpact: Connection, PreparedStatement, and ResultSet are acquired but never released on any code path (normal return or exception), causing connection pool exhaustion and eventual denial of service.\nFix: Wrap the entire sequence in try-with-resources: `try (Connection conn = pool.getConnection(); PreparedStatement ps = conn.prepareStatement(...)) { ResultSet rs = ps.executeQuery(); return rs.next() ? rs.getString(1) : null; }` \u2014 this automatically closes ps (which closes rs) and conn on all paths.\n\n[HIGH] Db.java:5 \u2014 ResultSet used after PreparedStatement scope ends\nImpact: The returned value depends on rs.next() and rs.getString(1), but rs belongs to ps; if ps is closed before the return statement executes (or in any exception path), rs is invalid.\nFix: Same as above \u2014 use try-with-resources to ensure ps and rs remain valid for the entire operation, or explicitly close all three resources in a finally block after extracting and storing the result."
   },
   "24cc79d78636ac273fff3a382196aefdacd8d2b6b6a665259906e1fa3aa56211": {
     "label": "Db.java",
@@ -57,11 +61,11 @@
   },
   "2d95527c06046bee4590099afae0ed7bf255422a656b93bba6e656d95f3bebce": {
     "label": "handlers.py",
-    "response": "[CRITICAL] handlers.py:3 \u2014 SQL injection via unparameterized f-string query\nImpact: Attacker can inject arbitrary SQL by crafting a malicious `id` parameter (e.g. `id=1 OR 1=1`), bypassing authentication, exfiltrating data, or corrupting the database.\nFix: Use parameterized query: `query = \"SELECT * FROM users WHERE id = ?\"` and pass `user_id` as a parameter to `db.execute(query, (user_id,))`."
+    "response": "[CRITICAL] handlers.py:3 \u2014 SQL injection via unsanitized user input\nImpact: Attacker can inject arbitrary SQL through the `id` request parameter, leading to unauthorized data access, modification, or deletion.\nFix: Use parameterized queries: `query = \"SELECT * FROM users WHERE id = ?\"; db.execute(query, (user_id,))`"
   },
   "2ff66d71c64ba9cc34af6a813a16786b753be8ceec9efd1d303482b08f634750": {
     "label": "UserController.cs, UserService.cs",
-    "response": "[HIGH] UserService.cs:2 \u2014 Nullable return type not handled at call site\nImpact: UserController.cs calls user.Name without null check; FindUser now returns User?, so user can be null and dereferencing .Name will throw NullReferenceException at runtime.\nFix: Add null check in UserController.cs before accessing user.Name, e.g., `if (user != null) return Ok(user.Name); return NotFound();`"
+    "response": "[HIGH] UserService.cs:2 \u2014 Breaking signature change: FindUser return type narrowed from non-nullable to nullable without updating call site\nImpact: UserController.cs line 2 calls `user.Name` without null-checking the result of `FindUser(id)`, which now returns `User?` and can be null, causing a potential NullReferenceException at runtime.\nFix: Either (1) update UserController.cs to null-check `user` before accessing `user.Name`, or (2) revert FindUser's return type to non-nullable `User` if null is not a valid result for this method."
   },
   "3061443c380d2a87f8d6936ea218e70d555d8e10814e11103771902defffb554": {
     "label": "billing.py",
@@ -69,7 +73,7 @@
   },
   "3477b475dc4da0bc3a8a20d0dedafc2db075dc223df7c5cdde5afb32a44c32e4": {
     "label": "payments.ts",
-    "response": "[CRITICAL] payments.ts:1 \u2014 Infinite retry loop with no backoff, cap, or failure propagation\nImpact: Any transient or permanent failure in `paymentGateway.charge()` will retry indefinitely without delay, causing the caller to hang forever and amplifying load on a failing payment service into a retry storm.\nFix: Add a retry cap (e.g. `let attempts = 0; while (attempts < 3)`), exponential backoff between retries (e.g. `await sleep(Math.pow(2, attempts) * 100)`), and propagate the final exception after exhaustion (e.g. `throw e;` after the loop exits).\n\n[HIGH] payments.ts:4 \u2014 Retry on non-idempotent operation without validation\nImpact: If `paymentGateway.charge()` succeeds but throws before returning (e.g. network timeout after charging), retrying will charge the card again, causing duplicate billing and financial data corruption.\nFix: Either ensure the payment gateway is idempotent (supports deduplication by orderId) and document that assumption, or implement client-side deduplication by checking order status before retrying (e.g. query order state; only retry if charge failed to commit)."
+    "response": "[CRITICAL] payments.ts:2-8 \u2014 Infinite retry loop with no backoff, cap, or failure propagation\nImpact: Any transient or permanent payment gateway failure causes the function to retry indefinitely without delay, creating a retry storm that amplifies load on a failing dependency and can hang the caller indefinitely.\nFix: Add a retry cap (e.g. `let attempts = 0; if (attempts++ >= 3) throw e;`), exponential backoff between attempts (e.g. `await sleep(Math.pow(2, attempts) * 100)`), and propagate the final exception after exhaustion instead of looping forever."
   },
   "34bf3d8adc0397cf57a9d696f6ac6078b45166c76d1155e1e09b45afe11f1e1a": {
     "label": "rates.ts",
@@ -115,6 +119,10 @@
     "label": "pricing.py, test_discounts.py",
     "response": "No high-impact issues found."
   },
+  "4a313fd11e82e05b1fa78e27a3935229fc2c24fa44c61a12a2c59a2fd0194b06": {
+    "label": "handlers.py",
+    "response": "No high-impact issues found."
+  },
   "4a8447c9f131643a54172f03a79654020017e39c64cb6a1bc4239288bfe5f138": {
     "label": "test_discounts.py",
     "response": "[HIGH] test_discounts.py:3 \u2014 Test assertion is tautological and cannot fail\nImpact: The assertion `assert result == result` is always true regardless of implementation; any regression in `compute_discount` will not be caught by this test, creating false confidence in coverage.\nFix: Replace with a concrete expected value: `assert result == <expected_discount_amount>` (e.g., `assert result == 60` if a 10% VIP discount on 600 is expected)."
@@ -129,7 +137,7 @@
   },
   "4f36bc9fdbd71781ed2ef19ab52dbc2fa27f7e2f614fc11e380d340fc8736a7a": {
     "label": "test_discounts.py",
-    "response": "[MEDIUM] test_discounts.py:3 \u2014 Test assertion is tautological and cannot fail\nImpact: `assert result == result` is trivially true regardless of the implementation; this test gives false confidence that `compute_discount` works correctly for VIP orders over 500, but will pass even if the function returns the wrong discount rate, crashes, or is deleted entirely.\nFix: replace the assertion with a concrete expected value, e.g. `assert result == 600 * 0.20` (or whatever the correct VIP discount for a 600-total order should be)."
+    "response": "[MEDIUM] test_discounts.py:3 \u2014 Test assertion is tautological and cannot fail\nImpact: `assert result == result` is always true regardless of implementation; the test gives false confidence that `compute_discount` works correctly when it actually exercises no constraint on the function's behavior.\nFix: replace with a concrete assertion on the expected output value, e.g. `assert result == 120` (or whatever the correct 20% discount on a 600-total order should be)."
   },
   "520910b2ce0ca1d4da3ef6cf17da30964684595c68d034c83a1351dbbc36fbeb": {
     "label": "leaderboard.py",
@@ -141,7 +149,7 @@
   },
   "61c0e45f9fa7b0a33c57153eff389463557a9c4d55b4b0547ca839f43c9f0b80": {
     "label": "pricing.py",
-    "response": "[MEDIUM] pricing.py:1 \u2014 New discount logic has no test coverage in this diff\nImpact: the VIP-discount boundary (is_vip=True AND total > 500 returning 20% vs. the 5% fallback) is a prime regression vector; without a test pinning both branches' outputs, a future refactor could silently flip the discount rate or drop the VIP check entirely.\nFix: add a test file (e.g. test_pricing.py) with three cases: compute_discount on a VIP order with total=600 asserts 120, a non-VIP order with total=600 asserts 30, and a VIP order at total=500 (the boundary) asserts 25."
+    "response": "[MEDIUM] pricing.py:1 \u2014 New discount-calculation logic has no test coverage in this diff\nImpact: the VIP-discount boundary condition (is_vip AND total > 500 triggering 20% vs. 5% discount) is exactly the kind of multi-part conditional that regresses silently on future refactors; no test file appears in this diff to pin either branch's output.\nFix: add a test file (e.g., test_pricing.py) with at least three cases: (1) VIP customer with order.total > 500 asserts 20% discount, (2) non-VIP customer asserts 5% discount, (3) VIP customer with order.total \u2264 500 asserts 5% discount."
   },
   "677635ba2f65c1e647ea9c6f0d170fec4404177c4e286c581b932f6c02387d9c": {
     "label": "Migrations/20260909_NewStagingTable.cs",
@@ -197,7 +205,7 @@
   },
   "94914065ab7ef1671351f5ec2790e8dd2ed6cdd7563a85123c63b8674df0ec12": {
     "label": "orders.py",
-    "response": "[HIGH] orders.py:2-5 \u2014 N+1 query pattern in loop\nImpact: Issues one database query per order ID instead of a single batched query; scales linearly with input size.\nFix: Replace the loop with a single batched query: `orders = db.query(Order).filter(Order.id.in_(order_ids)).all(); return [o.total for o in orders]`"
+    "response": "[HIGH] orders.py:3 \u2014 N+1 query pattern in loop over unbounded collection\nImpact: Issues one database query per order ID instead of a single batched query; scales linearly with input size and will cause material latency degradation as order_ids grows.\nFix: Replace the loop with a single batched query: `orders = db.query(Order).filter(Order.id.in_(order_ids)).all(); return [o.total for o in orders]`"
   },
   "966de12fbe448bf807a15cc98730c312f974efb580c136b56953bb38f474bdc3": {
     "label": "api.ts, checkout.ts",
@@ -211,7 +219,6 @@
     "label": "ReportSession.java",
     "response": "No high-impact issues found."
   },
-  "_meta": "Contains placeholder responses seeded from EXPECTED.md via --seed-placeholders-from-expected, NOT live-recorded model output. Refresh with `python scripts/validate_fixtures.py --live` against a real Foundry resource before trusting this cassette to catch a real prompt regression.",
   "ab17ad676b020fe4658dd93d4cfeb06ca5fa709a503d4719b87c3d3edc184a0c": {
     "label": "Migrations/20260909_WidenEmail.cs",
     "response": "No high-impact issues found."
@@ -258,7 +265,7 @@
   },
   "cb026873571cc3618abc18f84bacd4ed7e2c77b3a64acc63f9bddd745ed2441e": {
     "label": "billing.py",
-    "response": "[MEDIUM] billing.py:7 \u2014 compute_invoice_total duplicates compute_checkout_total's VIP-discount rule\nImpact: the 20%-VIP-discount rule now exists in two places; a future change to the threshold or rate that only updates one of them will make checkout and invoicing silently disagree on the same order's total.\nFix: extract the shared rule into one function (e.g. apply_vip_discount) and have both call sites use it."
+    "response": "[MEDIUM] billing.py:7 \u2014 compute_invoice_total duplicates compute_checkout_total's VIP-discount rule\nImpact: the 20%-VIP-discount rule now exists in two places; a future change to the threshold or rate that only updates one of them will make checkout and invoicing silently disagree on the same order's total.\nFix: extract the shared rule into one function (e.g. apply_vip_discount) and have both compute_checkout_total and compute_invoice_total call it."
   },
   "cc94e1a5e309dff2959106d43059b5073ced42eec104c84abf44dfa8cae6c5a5": {
     "label": "Db.java",
@@ -278,7 +285,7 @@
   },
   "d743b8fe1b763688fdbcaf859cc512f86fde64d1da7ae6e70b44727db6a3d527": {
     "label": "Migrations/20260909_ShrinkEmail.cs",
-    "response": "[CRITICAL] Migrations/20260909_ShrinkEmail.cs:4 \u2014 Narrowing Email column from varchar(255) to varchar(50) without backfill or validation\nImpact: Any existing row with an email address longer than 50 characters will be silently truncated on migration, corrupting user identities and breaking login/contact integrity.\nFix: Before executing the AlterColumn, add a migration step that either (1) backfills by truncating emails >50 chars to their first 50 characters and logging affected user IDs for manual review, or (2) explicitly fails the migration if any email exceeds 50 characters, forcing the operator to resolve the data first. Given that RFC 5321 permits emails up to 254 characters and real user emails routinely exceed 50, option (2) is strongly preferred to avoid silent data loss."
+    "response": "[HIGH] Migrations/20260909_ShrinkEmail.cs:4 \u2014 AlterColumn narrowing varchar(255) to varchar(50) without backfill\nImpact: Any existing row with an email address longer than 50 characters will be silently truncated on the next write, corrupting the email and breaking user account recovery/login if email is used as a lookup key.\nFix: Before narrowing the column, add a migration step that either (1) backfills existing emails longer than 50 characters to a valid shorter value with a mapping table for recovery, or (2) adds a data validation step that fails the migration if any row violates the new constraint, forcing manual remediation before proceeding."
   },
   "dd0916df3f6506576dae825e5520b363b2116dbe8917d9251c33026180657131": {
     "label": "Db.java",
