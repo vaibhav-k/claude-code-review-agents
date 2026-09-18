@@ -121,7 +121,10 @@ state is a defect in its own right, not merely an absence of one.
   `total=500` boundary — once `total > 500` is `False`, `is_vip` cannot
   change which branch is taken, so a non-VIP customer at `500` would hit
   the identical `else` branch and assert the identical `25`, proving
-  nothing the VIP-at-`500` test doesn't already prove.
+  nothing the VIP-at-`500` test doesn't already prove. This is the
+  discriminating-power principle from CLAUDE.md's Evidence Bar: a case that
+  provably reaches the same branch and the same outcome as one already
+  covered is not a second gap.
 - Do not report a test file as broken for referencing a name (a helper, a
   fixture, an imported symbol) that isn't defined in the diff you can see —
   assume it exists elsewhere (a conftest.py, a shared test-utils module,

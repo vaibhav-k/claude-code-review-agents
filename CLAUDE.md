@@ -28,7 +28,7 @@ of scope unless the diff changes their behavior, reachability, or blast radius.
 10. Meaningful testing gaps
 11. Maintainability
 
-## Evidence Bar (a finding must clear ALL five before it is reported)
+## Evidence Bar (a finding must clear ALL six before it is reported)
 
 1. **Path exists** — you can point to the concrete code path (function, branch,
    query, config value) that carries the defect.
@@ -44,8 +44,24 @@ of scope unless the diff changes their behavior, reachability, or blast radius.
    agree this is worth interrupting a PR for.
 5. **Fix is specific** — you can name the concrete remediation (not "add
    validation" but what validation, where, and why it closes the gap).
+6. **Discriminating power** — when a finding claims a gap, omission, or a
+   second instance of a pattern already flagged or already covered (an
+   untested branch, an unhandled input, a second race interleaving, a second
+   slow-path scenario), the additional case must be capable of reaching a
+   different code path or producing a different outcome than a case already
+   accounted for. Varying an input dimension, value, or attribute
+   combination that provably lands in the identical branch and computes the
+   identical result is not a second gap — it is the same gap relabeled. This
+   applies wherever a finding's strength rests on "but what about this other
+   value/attribute/interleaving" — check first whether that other case
+   actually diverges in code path or outcome from one already handled or
+   tested; if it doesn't, there is nothing new to report. (See
+   `testing-coverage-review.md`'s boundary-adjacent-test exclusion for the
+   canonical worked example, and `concurrency-resource-review.md`'s
+   "no third code path for a one-field class" exclusion for the same
+   principle applied to an invented resource-lifecycle scenario.)
 
-If any one of these five is missing, DO NOT report the finding. A false
+If any one of these six is missing, DO NOT report the finding. A false
 negative (missed issue) is always preferable to a low-confidence false
 positive. Do not pad output with speculative or hypothetical findings to
 appear thorough.

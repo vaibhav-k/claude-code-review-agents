@@ -56,7 +56,7 @@ state, are both "who owns this and when does it end" bugs.
 
 - Do not report a race or leak that existed before this diff and is not
   newly reachable, newly concurrent, or newly missing its guard because of
-  this diff.
+  this diff (see CLAUDE.md's Evidence Bar: causal-link requirement).
 - Do not report a TOCTOU race whose consequence is an authorization/security
   bypass — that is security-review's finding even though the mechanism is a
   race; you defer.
@@ -114,7 +114,10 @@ state, are both "who owns this and when does it end" bugs.
   between "constructs successfully, ownership passes to the caller" and
   "acquisition throws, nothing to release" for a one-field class. Judge the
   leak at a CALLER's construction site if and only if this diff shows one
-  without a try-with-resources/`using`/`with`.)
+  without a try-with-resources/`using`/`with`. This is the discriminating-
+  power principle from CLAUDE.md's Evidence Bar: an invented third scenario
+  that doesn't correspond to any additional real code path is not a second
+  gap.)
 - Do not report generic "this could theoretically be called concurrently"
   without evidence the diff's calling context is actually concurrent
   (multiple threads, async fan-out, a web request handler, a shared

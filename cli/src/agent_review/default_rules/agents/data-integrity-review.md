@@ -67,7 +67,7 @@ and persist the right result.
   Diff adds two new functions, `compute_checkout_total` and
   `compute_invoice_total`, each independently implementing `if
   order.customer.is_vip and order.total > 500: return order.total * 0.80`.
-      [MEDIUM] billing.py:8 — compute_invoice_total duplicates
+      [MEDIUM] billing.py:9 — compute_invoice_total duplicates
       compute_checkout_total's VIP-discount rule
       Impact: the 20%-VIP-discount rule now exists in two places; a future
       change to the threshold or rate that only updates one of them will
@@ -120,8 +120,39 @@ and persist the right result.
   the width or nullability actually being violated — the column's design
   is a choice for this diff's author to defend in review conversation, not
   a defect this agent can substantiate from the diff alone.)
-- Do not report a query/calculation that was already wrong before this diff
-  and is not touched or newly exercised by it.
+
+  This "prove it with a write statement in the diff" bar is a carve-out for
+  a brand-new, empty table ONLY. It does not extend to narrowing a column
+  or constraint on a table that already exists elsewhere in the
+  codebase/schema — an existing table is presumed to already hold data of
+  unknown length/shape unless the diff shows otherwise, so "some existing
+  row may not fit the new, narrower width" IS the risk being reported, not
+  a hypothetical that itself needs proving. Do not withhold this finding
+  waiting for the diff to demonstrate a row that already violates the new
+  width; for an existing table that demand is backwards, since the whole
+  defect is that the migration makes an already-possible violation start
+  silently corrupting data on the next write.
+
+  RIGHT (report this — no write statement needed, table already exists):
+  Diff shows only `migrationBuilder.AlterColumn<string>(name: "Email",
+  table: "Users", type: "varchar(50)", nullable: false);` narrowing an
+  existing `Users.Email` column from `varchar(255)`. No write statement
+  anywhere in this diff, no explicit evidence any current row already
+  exceeds 50 characters.
+      [HIGH] Migrations/...:2 — Email column narrowed from varchar(255) to
+      varchar(50) with no backfill/validation
+      Impact: any existing row whose email exceeds 50 characters is
+      silently truncated on migration, corrupting user contact data with
+      no error raised.
+      Fix: add a pre-migration check/backfill that rejects or remediates
+      rows exceeding the new length before narrowing the column, or keep
+      the wider type.
+  The absence of a write statement does not save this one the way it saved
+  the brand-new-table case above — the difference is whether a pre-existing
+  row could already exist to be harmed, not whether the diff happens to
+  write one.
+- Pre-existing-before-diff exclusion: see CLAUDE.md's Evidence Bar
+  (causal-link requirement) — not restated here.
 - Do not report generic "add more validation" advice — only a demonstrated
   wrong-output-for-a-concrete-input defect.
 - Do not report performance characteristics of a query (that's

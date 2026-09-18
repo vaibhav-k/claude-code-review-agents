@@ -3,6 +3,95 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.13] — 2026-09-18
+
+`data-integrity-review/true_positive` (the `Email varchar(255)`→`varchar(50)`
+narrowing migration, zero prior failure history across every earlier
+`--live` round) missed twice in a row against the exact prompt shipped in
+0.9.12, confirmed via request-key hash comparison against a real second
+opinion from the live model rather than assumed from the terminal summary
+alone. **Two of the three "failures" seen while diagnosing this were a red
+herring**: the `.claude/agents/*.md` protected-path delivery mechanism (a
+file download the user places by hand, since it can't be written
+remotely) hadn't been applied yet, so the first two live runs were
+actually testing 0.9.12's `CLAUDE.md` paired with the PRE-0.9.12
+`data-integrity-review.md` — a combination that never shipped and was
+never meant to be tested. Verified this by computing the exact
+`request_key()` hash for all four new/old×CLAUDE.md/agent-file
+combinations and matching each against the cassette's recorded miss
+before concluding anything, rather than trusting the coincidence.
+
+### Fixed
+
+- Once the correct file was actually in place, the miss recurred (real
+  n=2 against the genuine 0.9.12 prompt). Root cause: `data-integrity-
+  review.md`'s brand-new-table exclusion ("only a write statement inside
+  THIS diff proves the width/constraint is actually violated") sits
+  right next to `CLAUDE.md`'s new, more cautious Evidence Bar, and the
+  model appears to have generalized that brand-new-table-only evidentiary
+  bar to the narrowing-an-EXISTING-table case too — where it's backwards:
+  an existing table is presumed to already hold data of unknown
+  length/shape, so "some existing row may not fit" is the risk being
+  reported, not a hypothetical needing its own proof. Added an explicit
+  contrast directly after the brand-new-table WRONG/RIGHT example: a
+  second RIGHT example, using this exact fixture's diff, showing the
+  finding IS reportable with no write statement present, because the
+  table already exists. Synced the bundled `default_rules/` copy in the
+  same commit.
+  **Not yet live-verified** — an `--agent data-integrity-review --live`
+  rerun is required, and given `CLAUDE.md` is untouched by this fix, the
+  rest of the 0.9.12 validation matrix does not need to be re-run, only
+  this one agent's 4 cases.
+
+## [0.9.12] — 2026-09-18
+
+Lifted a recurring cross-agent pattern into `CLAUDE.md` as a new, sixth
+Evidence Bar requirement, and permanently ended the recurring
+`billing.py`/`handlers.py` blank-line drift instead of continuing to fight
+a local formatter every session. **This touches every agent's request-key
+hash (CLAUDE.md is inherited by all 8) — a full `--live` validation matrix
+run is required before treating any of this as confirmed, including
+re-recording `cli/tests/cassettes/integration.json` a second time (the
+run that just passed was against the pre-this-change prompt).**
+
+### Added
+
+- `CLAUDE.md`'s Evidence Bar gained a sixth requirement, **discriminating
+  power**: a finding claiming a gap, omission, or a second instance of an
+  already-covered pattern is only reportable if the additional case can
+  actually reach a different code path or produce a different outcome than
+  a case already covered. This generalizes 0.9.11's testing-coverage-review
+  fix (a redundant boundary-adjacent test demanded under a different
+  customer attribute) into a shared, project-wide principle, since the same
+  underlying shape already existed independently in
+  `concurrency-resource-review.md`'s "no third code path for a one-field
+  class" exclusion. See `DESIGN.md`'s write-up for the full reasoning.
+
+### Changed
+
+- `data-integrity-review.md`'s "already wrong before this diff" exclusion
+  was a near-verbatim restatement of `CLAUDE.md`'s existing Evidence Bar
+  causal-link requirement — trimmed to a one-line cross-reference.
+  `performance-review.md` and `concurrency-resource-review.md` had the same
+  near-duplicate wording but with real domain-specific elaboration worth
+  keeping, so those kept their text and gained a cross-reference instead of
+  a trim. `testing-coverage-review.md`'s boundary-adjacent exclusion and
+  `concurrency-resource-review.md`'s one-field-class exclusion each gained
+  a closing sentence naming the new Evidence Bar item they're now the
+  canonical worked examples of. All bundled `default_rules/` copies synced
+  in the same commit.
+- `tests/fixtures/data-integrity-review/true_positive_structural/billing.py`
+  and `tests/fixtures/security-review/boundary_case/handlers.py` adopted
+  the 2-blank-line PEP 8 form as their canonical committed content, instead
+  of the 1-blank-line form some local formatter kept overwriting it to on
+  every save (see 0.9.9's investigation). Fighting the formatter every
+  session was costing more than just matching its output once. Updated
+  `billing.py`'s `EXPECTED.md` line reference (`:8` → `:9`, one line added
+  before the flagged `if`) and the matching worked examples in
+  `data-integrity-review.md` and `DESIGN.md`'s validation matrix.
+  `handlers.py`'s `EXPECTED.md` has no line reference, so it needed no
+  change.
+
 ## [0.9.11] — 2026-09-18
 
 A fresh, unprompted full `--live` run (22/23) caught `testing-coverage-review/
@@ -30,11 +119,10 @@ for a non-VIP customer specifically at `total=500`.
   naming this exact reframing. Synced the bundled
   `cli/src/agent_review/default_rules/agents/testing-coverage-review.md`
   copy in the same commit (see `test_default_rules_sync.py`, 0.9.10).
-  **Not yet live-verified** — this changes `testing-coverage-review`'s
-  request-key hash, so an `--agent testing-coverage-review --live` rerun is
-  the natural next step before treating this as confirmed, consistent with
-  this project's own "verify before writing up as confirmed" discipline
-  (see 0.9.9's CRLF-theory correction).
+  **Confirmed live** — an `--agent testing-coverage-review --live` rerun
+  passed against real model output, not just the hand-reasoned theory
+  above. See `DESIGN.md`'s "Fourth reframing of the false_positive_trap
+  boundary complaint, closed" write-up for the full investigation.
 
 ## [0.9.10] — 2026-09-18
 

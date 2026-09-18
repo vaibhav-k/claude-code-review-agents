@@ -210,13 +210,14 @@ def compute_checkout_total(order):
         return order.total * 0.80
     return order.total
 
+
 def compute_invoice_total(order):
     # copy-pasted from compute_checkout_total when invoicing was added
     if order.customer.is_vip and order.total > 500:
         return order.total * 0.80
     return order.total
 ```
-Expected: `[MEDIUM] billing.py:8 — compute_invoice_total duplicates compute_checkout_total's VIP-discount rule`
+Expected: `[MEDIUM] billing.py:9 — compute_invoice_total duplicates compute_checkout_total's VIP-discount rule`
 Impact: the 20%-VIP-discount rule now exists in two places; a future change
 to the discount threshold or rate that only updates one of them will make
 checkout and invoicing silently disagree on the same order's total.
@@ -1566,6 +1567,161 @@ smaller cassette has no equivalent CLI flag. A further live recording is
 the natural next step, the same discipline this project has applied to
 every other placeholder-seeded cassette: don't trust a "PASS" is testing
 real model behavior until a real model has actually produced it.
+
+### Fourth reframing of the false_positive_trap boundary complaint, closed (2026-09-18)
+
+A fresh, unprompted full `--live` run (22/23, otherwise clean) caught
+`testing-coverage-review/false_positive_trap` failing for the first time
+since round 5, two full confirmed runs later. The complaint was a fourth
+distinct angle against the same fixture: `[MEDIUM] test_discounts.py:1 —
+Untested non-VIP discount branch at boundary condition`, demanding a test
+for a non-VIP customer specifically at `total=500` — the same boundary
+value already tested, just under a different customer attribute.
+
+Rounds 3-5's exclusion (see the round-5 write-up above) closed two prior
+reframings — a second boundary-adjacent *value* (e.g. `499`), and
+recharacterizing the existing boundary test as exercising "the wrong
+branch" — but its wording covered only the *value* axis. It didn't say
+anything about a second boundary-adjacent test varying an unrelated
+*attribute* instead, which is exactly the gap this new complaint walked
+through. Verified the demand had zero discriminating power before treating
+it as a real gap, the same discipline applied throughout this project:
+`compute_discount`'s branch is `if is_vip and total > 500`, so at
+`total=500`, `total > 500` is `False` regardless of `is_vip` — a non-VIP
+test at `500` would hit the identical `else` branch and assert the
+identical `25` the existing VIP-at-500 test already proves.
+
+**The fix.** Generalized the exclusion's wording from "a second
+boundary-adjacent test *value*" to "any input dimension that doesn't
+change the branch taken," and added a fourth explicit WRONG example naming
+this exact non-VIP-at-boundary reframing, in both `.claude/agents/
+testing-coverage-review.md` and its bundled `default_rules/` copy (kept in
+sync per `test_default_rules_sync.py`, added the round before this one).
+An `--agent testing-coverage-review --live` rerun confirmed the fix: the
+case now passes clean against real model output, not just against the
+hand-reasoned theory above.
+
+This makes four distinct reframings the model has now found against one
+adversarially-designed fixture across six live rounds (rounds 3, 4, 5, and
+this one) — each prior fix held clean for at least one full run before the
+next angle appeared. If a fifth appears, that would be the point to
+seriously weigh CONTRIBUTING.md's own "after repeated prompt-only fixes
+fail to hold, check the fixture, not just the prompt" guidance over adding
+a fifth rebuttal clause to what is already the longest single exclusion in
+this file.
+
+### Lifting "discriminating power" into CLAUDE.md, and ending the blank-line drift for good (2026-09-18)
+
+The fourth-reframing fix above closed one agent's specific instance of a
+pattern. Before applying it as one-off prompt tuning, it was worth checking
+whether the underlying principle — a claimed gap that doesn't actually
+reach a new code path or outcome isn't a new gap — already existed
+elsewhere, since a pattern that recurs across independently-written agent
+files is exactly what `CLAUDE.md` exists to hold once instead of N times.
+
+It did. `concurrency-resource-review.md`'s "no third code path for a
+one-field class" exclusion (round-unknown, predates this project's
+`--live` tuning history) is the same shape applied to an invented
+resource-lifecycle scenario instead of an invented test case: an argument
+that some additional scenario deserves a separate finding, when that
+scenario provably collapses into a code path/outcome already accounted
+for. Two independent agents had each grown their own version of this rule
+because nothing shared it. Lifted it into `CLAUDE.md`'s Evidence Bar as a
+sixth requirement, **discriminating power**, worded generally enough to
+cover a redundant test value, a redundant test attribute, a redundant race
+interleaving, or a redundant slow-path scenario alike — then pointed both
+`testing-coverage-review.md` and `concurrency-resource-review.md`'s
+existing worked examples back at it as canonical illustrations, rather
+than inventing a third example from scratch.
+
+While auditing agent files for what else could be shared rather than
+restated, three files turned out to independently restate `CLAUDE.md`'s
+existing Evidence Bar causal-link requirement ("a defect that existed
+identically before the diff... is NOT reportable") almost verbatim:
+`data-integrity-review.md`, `performance-review.md`, and
+`concurrency-resource-review.md`. The first was a pure restatement with no
+added nuance, so it was trimmed to a one-line cross-reference. The latter
+two each add real domain-specific elaboration (concurrency's "not newly
+reachable, newly concurrent, or newly missing its guard") worth keeping,
+so those kept their text and gained a cross-reference instead of losing
+content to a trim.
+
+Separately, closed out the `billing.py`/`handlers.py` blank-line saga from
+0.9.9/0.9.11 for good: rather than continuing to restore the 1-blank-line
+form every time a local formatter (isort, an editor's on-save "organize
+imports"/formatter, never conclusively identified) rewrote it back to
+2 blank lines, adopted 2 blank lines — real PEP 8 convention anyway — as
+the canonical committed form. This is a one-time content change, not a
+process fix, so there's no guarantee against a *different* local tool
+introducing a *different* unwanted change later; it just removes the one
+specific, repeatedly-observed friction this project has actually hit three
+times.
+
+**Verification status.** `CLAUDE.md` is inherited by all 8 agents, so this
+change invalidates every cassette entry in `tests/fixtures/cassettes.json`
+and both entries in `cli/tests/cassettes/integration.json` — including the
+integration cassette that had *just* been confirmed live in the same
+session, against the pre-this-change prompt. A full `--live` run across
+the whole `tests/fixtures/` matrix, plus a fresh
+`AGENT_REVIEW_RECORD_LIVE=1 pytest cli/tests/test_cli_integration_live.py`,
+is required before any of this — the Evidence Bar addition, the trims, or
+the fixture canonicalization — is treated as more than a reasoned draft.
+
+### A stale-file false alarm, then a real evidentiary-bar bleed (2026-09-18)
+
+The full `--live` confirmation run above came back 22/23: everything
+passed except `data-integrity-review/true_positive` (the `Email
+varchar(255)`→`varchar(50)` narrowing migration), a case with zero
+failures across every prior round. A rerun scoped to just that agent
+repeated the identical miss — on the surface, n=2, real signal.
+
+It wasn't. `.claude/agents/*.md` is a protected path this session can only
+deliver as a file download for the user to place by hand; `CLAUDE.md`
+itself isn't protected and went straight in via the direct-write path. The
+two paths update at different times, and nothing forces them to land
+together. Before touching the prompt on the strength of two identical
+failures, computed the actual `request_key()` hash for all four
+combinations of {new, old} `CLAUDE.md` × {new, old} `data-integrity-
+review.md` against this exact fixture, and matched each one against the
+cassette's recorded miss. The miss's hash matched exactly one combination:
+new `CLAUDE.md` (with the discriminating-power addition) paired with the
+OLD, pre-lift `data-integrity-review.md` — the file download hadn't been
+placed yet. Both "failures" were the same stale file being hit twice, not
+two independent live samples of the shipped prompt. This is the same
+"verify before treating a coincidence as confirmed" discipline as 0.9.9's
+CRLF correction, just applied to a delivery-mechanism question instead of
+a line-ending one — and cheap to do exactly because this project's own
+hashing scheme makes "which exact prompt produced this response" a
+computable fact instead of a guess.
+
+Once the file was actually placed (confirmed by having the user paste its
+contents back and checking for the tell-tale lifted lines) and rerun, the
+miss recurred — this time a genuine n=2 against the real, shipped 0.9.12
+prompt. Real signal, this time. The likely mechanism: `data-integrity-
+review.md`'s brand-new-table exclusion — "only a write statement inside
+THIS diff proves the width/constraint is violated" — sits directly beside
+`CLAUDE.md`'s new, more cautious Evidence Bar, and the model appears to
+have generalized that brand-new-table-only evidentiary bar to the
+narrowing-an-EXISTING-table case too. That generalization runs backwards:
+an existing table is presumed to already hold data of unspecified length
+unless the diff shows otherwise, so "some existing row may not fit the
+narrower width" is the risk itself, not a hypothetical requiring its own
+proof the way an empty, brand-new table's design choice does. This is a
+plausible instance of a risk this project hadn't previously named:
+prompt-wide changes for one purpose (the discriminating-power lift) can
+shift how nearby, unrelated exclusions get read, purely by increasing the
+document's overall evidentiary caution — worth watching for again on any
+future `CLAUDE.md`-wide edit, not just this one.
+
+**The fix.** Added a second RIGHT example directly after the brand-new-
+table one, using this exact fixture's diff, explicit that the "prove it
+with a write" bar does not extend past the brand-new-table case: the
+narrowing-an-existing-table finding is reportable with no write statement
+present, because the difference that matters is whether a pre-existing row
+could already exist to be harmed, not whether the diff happens to write
+one. Synced the bundled `default_rules/` copy. Not yet live-verified —
+that's the natural next step, scoped to this one agent since `CLAUDE.md`
+itself is untouched by this fix.
 
 ### Structured output, budget management, and the feedback loop (implemented in 0.9.0)
 
