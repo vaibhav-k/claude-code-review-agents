@@ -1,4 +1,8 @@
 {
+  "300d3f5fd0218b8d87d480842904950c4c64fc8482f1188cb01cfb88d98aafb9": {
+    "label": "safe_handlers.py",
+    "response": "No high-impact issues found."
+  },
   "454de795696b68c4a159cd83c824904ad5e8e73da05d793d0d07632427e45300": {
     "label": "safe_handlers.py",
     "response": "No high-impact issues found."
@@ -19,7 +23,10 @@
     "label": "handlers.py",
     "response": "```\n[CRITICAL] handlers.py:2 \u2014 SQL injection via unsanitized request parameter\nImpact: User-controlled input from get_request_id() is directly interpolated into a SQL query string, allowing an attacker to inject arbitrary SQL commands (e.g., UNION-based data exfiltration, authentication bypass, or data modification).\nFix: Replace the f-string with a parameterized query: query = \"SELECT * FROM users WHERE id = ?\"; result = db.execute(query, (user_id,)).fetchone()\n```"
   },
-  "_meta": "Re-seeded 2026-09-18 with hand-authored placeholders after syncing cli/src/agent_review/default_rules/ to the current, live-tuned root CLAUDE.md/.claude/agents/ prompts (see test_default_rules_sync.py) -- the request keys reflect the corrected bundled prompt text, but this response TEXT is NOT live-recorded. Refresh with AGENT_REVIEW_RECORD_LIVE=1 pytest cli/tests/test_cli_integration_live.py (real ANTHROPIC_FOUNDRY_* credentials required) before trusting this for real prompt-regression detection, then commit the diff.",
+  "85bc66cd16f11e0b47a43cc0e3134fc5b6ffca61a2635eb5d0fe9a8eae48c695": {
+    "label": "safe_handlers.py",
+    "response": "No high-impact issues found."
+  },
   "b56cd0396fd10b11d868ca473d6b1ca6d75bdbfc9a54b99d8f4bd8fa881a70e9": {
     "label": "handlers.py",
     "response": "[CRITICAL] handlers.py:2 \u2014 SQL injection via unsanitized string interpolation\nImpact: Attacker-controlled `user_id` can inject arbitrary SQL, compromising data confidentiality, integrity, and availability.\nFix: Use parameterized query: `query = \"SELECT * FROM users WHERE id = ?\"` and pass `user_id` as a parameter to `db.execute(query, (user_id,))`."
@@ -27,6 +34,14 @@
   "ce2b3d99f06716feaa0a8edf4e9cd285768b95672855611ad5730b3994d8bb0d": {
     "label": "safe_handlers.py",
     "response": "No high-impact issues found."
+  },
+  "e399eff46e03933c4c9b11fcad7e1a44b6f26c47a042b362b15ea3c74c362fc4": {
+    "label": "handlers.py",
+    "response": "[CRITICAL] handlers.py:2 \u2014 SQL injection via unparameterized query\nImpact: User-controlled ID is interpolated directly into SQL query, allowing an attacker to inject arbitrary SQL (e.g., `1; DROP TABLE users; --`) by controlling the request ID.\nFix: Use parameterized query: `result = db.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,)).fetchone()` (or your database driver's parameter binding equivalent)."
+  },
+  "f27bdfa94cf31b9fb8c5958d4d8ade98deb5276d33d4f205f390984ab082b281": {
+    "label": "handlers.py",
+    "response": "[CRITICAL] handlers.py:2 \u2014 SQL injection vulnerability via unparameterized query string\nImpact: Attacker-controlled `user_id` is concatenated directly into the SQL query, allowing arbitrary SQL injection and data exfiltration, modification, or deletion.\nFix: Use parameterized query with placeholder: `query = \"SELECT * FROM users WHERE id = ?\"` and `result = db.execute(query, (user_id,)).fetchone()` (or equivalent for your DB driver)."
   },
   "fecf0bbd7ae660f2033574d14dc43bbd955ef0bda6b63df0e102dba0728b096f": {
     "label": "handlers.py",

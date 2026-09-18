@@ -3,6 +3,35 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.14] — 2026-09-18
+
+`data-integrity-review --live` came back 4/4 clean, confirming 0.9.13's
+fix live for real. Attempting the still-outstanding
+`cli/tests/test_cli_integration_live.py` recording surfaced a real, if
+smaller, DX gap of its own: running it plain (no env vars) failed against
+the stale placeholder cassette as expected, but running it with
+`AGENT_REVIEW_RECORD_LIVE=1` and `ANTHROPIC_FOUNDRY_MODEL` set still
+failed with `RuntimeError: No Microsoft Foundry resource configured`,
+even though a working `cli/.env` already exists — `cli/tests/conftest.py`'s
+`_no_real_dotenv_lookup` autouse fixture disables `.env` loading for
+every test in the suite, including this file's opt-in recording path,
+which is the one place that actually wants real credentials loaded.
+
+### Fixed
+
+- `cli/tests/test_cli_integration_live.py` now captures a direct
+  reference to the real, unpatched `_load_dotenv_if_present` at module
+  import time (before `conftest.py`'s autouse fixture ever runs, same
+  technique `test_cli_dotenv.py` already uses) and calls it explicitly at
+  the top of `reviewer_and_cassette`'s recording branch, before
+  constructing `AnthropicFoundryReviewer()`. Ordinary replay-mode tests in
+  this file and the rest of the suite are unaffected — the autouse
+  fixture still blocks `.env` loading everywhere else, correctly. This
+  doesn't override anything already exported by hand
+  (`_load_dotenv_if_present` itself never overrides a real environment
+  variable) — it just means a working `cli/.env` is enough on its own,
+  the same as it already is for `scripts/validate_fixtures.py --live`.
+
 ## [0.9.13] — 2026-09-18
 
 `data-integrity-review/true_positive` (the `Email varchar(255)`→`varchar(50)`
@@ -38,10 +67,12 @@ before concluding anything, rather than trusting the coincidence.
   finding IS reportable with no write statement present, because the
   table already exists. Synced the bundled `default_rules/` copy in the
   same commit.
-  **Not yet live-verified** — an `--agent data-integrity-review --live`
-  rerun is required, and given `CLAUDE.md` is untouched by this fix, the
-  rest of the 0.9.12 validation matrix does not need to be re-run, only
-  this one agent's 4 cases.
+  **Confirmed live** — `--agent data-integrity-review --live` came back
+  4/4, including the true_positive case firing correctly. This closes out
+  0.9.12's full change: the discriminating-power Evidence Bar lift, the
+  three exclusion trims/cross-references, the billing.py/handlers.py
+  canonicalization, and this fix are all now live-verified as one
+  confirmed state.
 
 ## [0.9.12] — 2026-09-18
 

@@ -1719,9 +1719,55 @@ with a write" bar does not extend past the brand-new-table case: the
 narrowing-an-existing-table finding is reportable with no write statement
 present, because the difference that matters is whether a pre-existing row
 could already exist to be harmed, not whether the diff happens to write
-one. Synced the bundled `default_rules/` copy. Not yet live-verified —
-that's the natural next step, scoped to this one agent since `CLAUDE.md`
-itself is untouched by this fix.
+one. Synced the bundled `default_rules/` copy.
+
+**Confirmed.** `--agent data-integrity-review --live` came back 4/4,
+`true_positive` firing correctly. This closes out the entire 0.9.12
+`CLAUDE.md`-wide change as one verified state: the discriminating-power
+lift, the three exclusion trims/cross-references, the fixture
+canonicalization, and this fix.
+
+### A second .env-loading gap, in the opt-in recording path this time (2026-09-18)
+
+Attempting the still-outstanding `cli/tests/cassettes/integration.json`
+re-recording (needed since `CLAUDE.md` changed again, same reasoning as
+0.9.10's original recording) surfaced a smaller but related DX gap.
+Running the file plain failed against the stale placeholder cassette, as
+expected. Running it with `AGENT_REVIEW_RECORD_LIVE=1` and
+`ANTHROPIC_FOUNDRY_MODEL` set still failed:
+`RuntimeError: No Microsoft Foundry resource configured`, despite a
+working `cli/.env` existing on disk — the same class of gap flagged
+earlier in this project's history (a `DeploymentError` from a missing
+`ANTHROPIC_FOUNDRY_MODEL`), just a different missing variable this time
+(`ANTHROPIC_FOUNDRY_RESOURCE`).
+
+Both times the root cause is the same: `cli/tests/conftest.py`'s
+`_no_real_dotenv_lookup` autouse fixture disables `.env` loading for
+every test in `cli/tests/`, correctly, so ordinary replay tests don't
+depend on whatever happens to be on a given developer's disk. But it
+applies just as hard to `test_cli_integration_live.py`'s
+`AGENT_REVIEW_RECORD_LIVE=1` path, which is the one place in the whole
+suite that explicitly wants real credentials — that's the entire point of
+opting into live recording. Every previous encounter with this was
+treated as a one-off "export more variables by hand" instruction; the
+second occurrence made it worth fixing structurally instead of explaining
+a third time.
+
+**The fix.** `test_cli_integration_live.py` now imports
+`_load_dotenv_if_present` directly by reference at module load time —
+before `conftest.py`'s autouse fixture ever runs and monkeypatches the
+`cli` module's attribute — the same technique `test_cli_dotenv.py`
+already uses to test the real function on its own terms. The recording
+branch of `reviewer_and_cassette` calls this captured reference explicitly
+before constructing `AnthropicFoundryReviewer()`. Every other test in the
+suite, including this file's own replay-mode path, is unaffected — the
+autouse block still applies everywhere else. `_load_dotenv_if_present`
+itself never overrides a variable already set in the real environment
+(`load_dotenv()`'s `override=False`), so this is purely additive: a
+working `cli/.env` is now enough on its own for recording, matching how
+`scripts/validate_fixtures.py --live` has behaved all along. Not yet
+exercised against a real Foundry call in this exact form — the natural
+next step.
 
 ### Structured output, budget management, and the feedback loop (implemented in 0.9.0)
 

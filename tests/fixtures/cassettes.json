@@ -481,11 +481,11 @@
   },
   "ef8e81c7b29410a5f6b020c475d149d7ef6fe5a917e86e2ae0ad6730ce3951b5": {
     "label": "Migrations/20260909_ShrinkEmail.cs",
-    "response": "[HIGH] Migrations/20260909_ShrinkEmail.cs:1 \u2014 Email column narrowed from varchar(255) to varchar(50) with no backfill/validation\nImpact: any existing row whose email exceeds 50 characters is silently truncated on migration, corrupting user contact data with no error raised.\nFix: add a pre-migration check that identifies and rejects or remediates rows exceeding 50 characters before narrowing the column, or keep the column at varchar(255)."
+    "response": "[HIGH] Migrations/20260909_ShrinkEmail.cs:1 \u2014 Email column narrowed from varchar(255) to varchar(50) with no backfill/validation\nImpact: any existing row whose email exceeds 50 characters is silently truncated on migration, corrupting user contact data with no error raised.\nFix: add a pre-migration check that rejects the migration if any existing email exceeds 50 characters, or add a backfill step that remediates/archives affected rows before narrowing the column, or keep the wider type."
   },
   "f21e2c08825853510a2572a008e78f0f53048eed5539ff42091bd58d383401d7": {
     "label": "billing.py",
-    "response": "[MEDIUM] billing.py:7 \u2014 compute_invoice_total duplicates compute_checkout_total's VIP-discount rule\nImpact: the 20%-VIP-discount rule now exists in two places; a future change to the threshold or rate that only updates one of them will make checkout and invoicing silently disagree on the same order's total.\nFix: extract the shared rule into one function (e.g. apply_vip_discount) and have both call sites use it."
+    "response": "[MEDIUM] billing.py:7 \u2014 compute_invoice_total duplicates compute_checkout_total's VIP-discount rule\nImpact: the 20%-VIP-discount rule now exists in two places; a future change to the threshold, rate, or eligibility criteria that updates only one of them will make checkout and invoicing silently disagree on the same order's total.\nFix: extract the shared rule into one function (e.g. apply_vip_discount) and have both compute_checkout_total and compute_invoice_total call it."
   },
   "f35f464ae0f5ccd0f1aff6ea273eb0e5d76c72d4ec23cb737a0479b0cb11ebb1": {
     "label": "handlers.py",
