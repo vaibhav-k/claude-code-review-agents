@@ -88,19 +88,26 @@ state is a defect in its own right, not merely an absence of one.
   responsibility-mixing complexity spikes — those are correctness-risk
   findings owned by data-integrity-review when they carry a concrete
   drift/behavior risk, not a testing-coverage concern.
-- Do not demand a second boundary-adjacent test value when the exact
-  boundary value itself is already tested and the additional value would
-  provably exercise the identical branch (a `> 500` comparison tested at
-  exactly `500` already covers every value up to and including it — a test
-  at `499` or `450` exercises the same branch as the one at `500` and adds
-  no discriminating power). "The boundary itself is untested" is a real
-  gap; "the boundary is tested but a neighboring non-boundary value isn't"
-  is not a second gap. This includes reframing the same complaint as the
-  test being "wrong" rather than a second value being "missing" — a test
-  asserting that a VIP customer at exactly the boundary gets the NON-VIP
-  rate is not a mistake to fix, it is the correct, textbook way to test a
-  strict `>` comparison's boundary (there is no total value where a VIP
-  customer AT the boundary receives the VIP rate — the boundary is by
+- Do not demand a second boundary-adjacent test case — whether it varies the
+  boundary value itself (a neighboring number) or varies some other input
+  attribute instead (a different flag or field unrelated to the boundary
+  comparison) — when the exact boundary is already tested and the
+  additional case would provably exercise the identical branch and produce
+  the identical computed value. A `> 500` comparison tested at exactly
+  `500` already covers every value up to and including it: a test at `499`
+  or `450` exercises the same branch as the one at `500` and adds no
+  discriminating power, and re-testing that same `500` boundary under a
+  different value of an unrelated flag adds none either, if that flag
+  cannot change which branch is taken at that boundary. "The boundary
+  itself is untested" is a real gap; "the boundary is tested but a
+  neighboring non-boundary value isn't" is not a second gap, and neither is
+  "the boundary is tested but not under every other attribute combination
+  that reaches the same branch." This includes reframing the same
+  complaint as the test being "wrong" rather than a case being "missing" —
+  a test asserting that a VIP customer at exactly the boundary gets the
+  NON-VIP rate is not a mistake to fix, it is the correct, textbook way to
+  test a strict `>` comparison's boundary (there is no total value where a
+  VIP customer AT the boundary receives the VIP rate — the boundary is by
   definition excluded).
 
   RIGHT (no finding) for a diff whose test file is exactly this:
@@ -108,10 +115,13 @@ state is a defect in its own right, not merely an absence of one.
   return total * 0.05`) tested by three cases: VIP at `total=600` → `120`,
   non-VIP at `total=600` → `30`, VIP at `total=500` (the boundary) → `25`.
   This is a complete boundary test for a `>` comparison: one value strictly
-  past it, one value at it. Do not ask for a fourth value (e.g. `499`) or
-  recharacterize the third test as testing "the wrong branch" — landing on
-  the non-VIP rate at exactly `500` is the assertion the boundary test
-  exists to make.
+  past it, one value at it. Do not ask for a fourth value (e.g. `499`), do
+  not recharacterize the third test as testing "the wrong branch," and do
+  not ask for a fourth case that swaps `is_vip` to `False` at the same
+  `total=500` boundary — once `total > 500` is `False`, `is_vip` cannot
+  change which branch is taken, so a non-VIP customer at `500` would hit
+  the identical `else` branch and assert the identical `25`, proving
+  nothing the VIP-at-`500` test doesn't already prove.
 - Do not report a test file as broken for referencing a name (a helper, a
   fixture, an imported symbol) that isn't defined in the diff you can see —
   assume it exists elsewhere (a conftest.py, a shared test-utils module,

@@ -1504,6 +1504,69 @@ artifact of whatever's touching these files locally, invisible to git
 itself, which is exactly why it kept resurfacing silently instead of
 showing up as a pending change to commit.
 
+### The bundled default prompts had silently drifted (2026-09-18)
+
+Recording `cli/tests/cassettes/integration.json` live for the first time —
+the last explicitly-flagged "still-open gap" from 0.9.8's README update —
+was meant to be a clean, low-risk step: unlike the `tests/fixtures/`
+validation matrix, this test's content is hardcoded Python string literals,
+not files that can drift on disk. It surfaced a real bug anyway, just a
+different one than expected.
+
+The first recording attempt came back with `security-review`'s finding
+wrapped in a markdown code fence — exactly the shape `CLAUDE.md`'s output
+contract explicitly forbids ("Never wrap your response ... in a markdown
+code fence"). Comparing the prompt this test actually exercises against
+the root repo's own copy explained why: `cli/tests/test_cli_integration_live.py`
+deliberately creates a temp repo with neither `.agent-rules/` nor
+`.claude/` of its own, specifically to exercise `prompts.py`'s bundled
+`default_rules/` fallback path for real — the same path a real CLI user
+gets when reviewing a repo that has no Claude-Code-native agent
+definitions of its own. That bundled `CLAUDE.md` was missing the entire
+anti-code-fence rule, because it had never been updated since some point
+before this project's six-round `--live` tuning history began. Diffing
+every bundled file against its root counterpart found the same story
+everywhere: all 7 specialist prompts and `CLAUDE.md` itself had drifted,
+none carrying any of the worked examples, exclusion refinements, or
+fixture fixes from rounds 2 through 5.
+
+`prompts.py`'s own module docstring describes `default_rules/` as "a
+snapshot of this project's own agents at the time this CLI was built" —
+a deliberate point-in-time copy, not a symlink, so *some* drift after an
+edit is expected and not itself a bug. What was actually missing was
+anything that made an un-synced edit visible. Nothing in CI ever compared
+the two locations, and `cli-ci.yml`'s trigger paths didn't even include
+`.claude/agents/**` or root `CLAUDE.md` — a PR that touched only a prompt
+file, with zero changes under `cli/`, wouldn't have run this workflow at
+all even if the comparison test had already existed. This means every one
+of this project's six live-tuning rounds shipped its fixes to the
+Claude-Code-native `.claude/agents/` path (what this repo, and any repo
+that copies its `.claude/` directory, actually uses) while silently never
+reaching the standalone CLI's own bundled defaults — a real quality gap
+for any `agent-review`/`agent-init` user whose target repo has no
+`.claude/`/`.agent-rules/` override of its own, invisible because nothing
+tested that specific path against real model behavior until this run.
+
+**The fix.** Synced every bundled file (`CLAUDE.md` plus all 7 specialist
+prompts, `triage-router.md` deliberately excluded — see `cli/README.md`'s
+"How it works": `routing.py` is a direct code port of its rule table, so
+the CLI never loads it as a system prompt) to its root counterpart, and
+added `cli/tests/test_default_rules_sync.py`: two tests that assert
+byte-for-byte equality between each root file and its bundled copy,
+failing loudly with the exact file name the moment they diverge. Extended
+`cli-ci.yml`'s trigger paths to include `.claude/agents/**` and root
+`CLAUDE.md`, so a prompt-only PR actually runs this check instead of
+silently skipping the whole workflow. `cli/tests/cassettes/
+integration.json`'s cassette entries recorded against the stale prompt are
+no longer reachable (the corrected prompt hashes differently) and were
+re-seeded with hand-authored placeholders, clearly labeled as such in
+`_meta` — the same bootstrap convention as `tests/fixtures/`'s
+`--seed-placeholders-from-expected`, extended by hand here since this
+smaller cassette has no equivalent CLI flag. A further live recording is
+the natural next step, the same discipline this project has applied to
+every other placeholder-seeded cassette: don't trust a "PASS" is testing
+real model behavior until a real model has actually produced it.
+
 ### Structured output, budget management, and the feedback loop (implemented in 0.9.0)
 
 Three further production-readiness gaps were identified alongside the CI

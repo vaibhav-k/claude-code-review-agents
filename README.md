@@ -1,7 +1,5 @@
 # claude-code-review-agents
 
-**Repository:** [github.com/vaibhav-k/claude-code-review-agents](https://github.com/vaibhav-k/claude-code-review-agents)
-
 A production-grade, inference-efficient Claude Code subagent system for
 automated diff review. It caps out at **8 total agents** — one triage
 router plus seven razor-scoped defect-class specialists (security, data

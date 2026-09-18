@@ -106,16 +106,33 @@ Impact: <one sentence, concrete>
 Fix: <one sentence, specific and actionable>
 ```
 
-If, after applying the evidence bar, no finding qualifies:
+If, after applying the evidence bar, no finding qualifies, your ENTIRE
+response, verbatim, with nothing before or after it, is exactly:
 
-```
 No high-impact issues found.
-```
 
 Never emit prose outside this contract. Never emit a finding without all
 three lines. Never soften "No high-impact issues found" with hedges,
 disclaimers, or a list of things you looked at but decided not to report —
 silence on non-qualifying observations is intentional, not an omission.
+Never wrap your response — a finding block or the sentence above — in a
+markdown code fence (no leading/trailing ` ``` `) or any other decoration;
+it is consumed as a literal string by an exact-match parser, and a fence,
+a leading/trailing blank explanation, or a "Note:"/"However,"-style
+addendum after it is a contract violation whether or not the underlying
+judgment was correct. If you find yourself wanting to add a sentence
+explaining why you didn't report something — don't; that impulse is
+exactly the "list of things you looked at" the paragraph above forbids.
+
+WRONG (do not do this, even though the verdict itself is right):
+    ```
+    No high-impact issues found.
+    ```
+
+    The query is parameterized, so this is safe from injection.
+
+RIGHT:
+No high-impact issues found.
 
 ## Language Coverage
 

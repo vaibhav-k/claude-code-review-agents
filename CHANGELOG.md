@@ -3,6 +3,87 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.11] — 2026-09-18
+
+A fresh, unprompted full `--live` run (22/23) caught `testing-coverage-review/
+false_positive_trap` failing for the first time since round 5, with a fourth
+distinct complaint angle against the same fixture: `[MEDIUM] test_discounts.py:1
+— Untested non-VIP discount branch at boundary condition`, demanding a test
+for a non-VIP customer specifically at `total=500`.
+
+### Fixed
+
+- `.claude/agents/testing-coverage-review.md`'s boundary-adjacent-test
+  exclusion (added round 4, extended round 5) was written narrowly in terms
+  of a second boundary-adjacent *value* (e.g. `499`) and a "wrong branch"
+  recharacterization — it didn't cover a third reframing: demanding a second
+  boundary-adjacent *attribute combination* (a non-VIP customer) at the same
+  already-tested boundary value. Verified this has zero discriminating power
+  before treating it as a real gap: once `total > 500` is `False`, `is_vip`
+  cannot change which branch is taken, so `(is_vip=False, total=500)` hits
+  the identical `else` branch and asserts the identical `25` that
+  `(is_vip=True, total=500)` already proves — the same underlying "redundant
+  boundary-adjacent test demand" as rounds 3–5, just walked sideways from the
+  value axis to an unrelated-attribute axis the existing wording didn't
+  cover. Generalized the exclusion's wording to "any input dimension that
+  doesn't change the branch taken" and added a fourth explicit WRONG example
+  naming this exact reframing. Synced the bundled
+  `cli/src/agent_review/default_rules/agents/testing-coverage-review.md`
+  copy in the same commit (see `test_default_rules_sync.py`, 0.9.10).
+  **Not yet live-verified** — this changes `testing-coverage-review`'s
+  request-key hash, so an `--agent testing-coverage-review --live` rerun is
+  the natural next step before treating this as confirmed, consistent with
+  this project's own "verify before writing up as confirmed" discipline
+  (see 0.9.9's CRLF-theory correction).
+
+## [0.9.10] — 2026-09-18
+
+Recording `cli/tests/cassettes/integration.json` live for the first time
+(closing the last explicitly-documented "still-open gap" from 0.9.8's
+README update) surfaced something much bigger than that gap itself: the
+CLI's bundled default prompts had silently drifted from the real,
+live-tuned ones.
+
+### Fixed
+
+- **`cli/src/agent_review/default_rules/`** (the prompts a target repo
+  gets when it has neither `.agent-rules/` nor `.claude/` of its own) had
+  not been updated since some point before this project's six-round
+  `--live` tuning history — all 7 bundled specialist prompts and the
+  bundled `CLAUDE.md` had drifted from the real ones at the repo root.
+  Concretely: the bundled `CLAUDE.md` was missing the entire "never wrap
+  your response in a markdown code fence" output-contract rule, which is
+  exactly why the first live-recording attempt at `cli/tests/cassettes/
+  integration.json` came back with a response wrapped in ` ``` ` — not a
+  fresh model quirk, a real, previously-shipped gap between what this
+  project's own validation actually tests and what a real CLI user with
+  no `.claude/` of their own actually gets. Synced every bundled file to
+  its root counterpart and added `cli/tests/test_default_rules_sync.py`,
+  which fails loudly and names the exact file the moment a root prompt
+  changes without its bundled copy following — the missing piece that let
+  this drift accumulate silently across six rounds. `.claude/agents/**`
+  and root `CLAUDE.md` are now also trigger paths for `cli-ci.yml`, so a
+  prompt-only edit (touching nothing else under `cli/`) still runs this
+  check instead of silently skipping it.
+- `cli/tests/test_cli_integration_live.py`'s recording fixture now clears
+  the cassette's stale `_meta` "not live-recorded" note after a recording
+  run, same bug and same fix as `scripts/validate_fixtures.py`'s `run()`
+  from 0.9.9.
+
+### Changed
+
+- `cli/tests/cassettes/integration.json` re-seeded with hand-authored
+  placeholders (clearly labeled in `_meta`) for the 4 request keys the
+  corrected bundled prompts now produce — the previous entries recorded
+  against the stale prompt are no longer reachable. **Not yet
+  live-verified against the corrected prompt** — a further
+  `AGENT_REVIEW_RECORD_LIVE=1 pytest cli/tests/test_cli_integration_live.py`
+  run is what actually confirms these two tests pass against genuine model
+  output rather than a hand-authored guess, and is the natural next step.
+
+No agent prompt content changed in this release beyond the sync itself —
+this closes a distribution gap, not a review-quality one.
+
 ## [0.9.9] — 2026-09-17/18
 
 The sixth real `--live` run reported the first fully clean 23/23 — but
