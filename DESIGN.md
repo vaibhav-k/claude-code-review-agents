@@ -1334,6 +1334,157 @@ boundary_case` finally hold now that the underlying fixtures no longer
 ask the model to stay silent about the exact kind of finding it has the
 strongest trained priors toward reporting.
 
+### Fifth real `--live` run (2026-09-17): the round-4 fixture fixes held; new signal elsewhere
+
+The fifth run did NOT repeat `data-integrity-review/boundary_case` or
+`concurrency-resource-review/boundary_case` — round 4's fixture changes
+(swapping the email column for a non-canonical one, fixing the real
+`Statement` leak) held on their first live test. That's the strongest
+confirmation yet for the "the fixture was the problem, not the prompt"
+diagnosis. Four different failures surfaced instead, read in full:
+
+1. **`data-integrity-review/true_positive_structural` missed a third
+   time** (having also missed in round 2, then passed in round 4). A
+   flip between pass and fail on byte-identical prompt text across
+   different rounds is the clearest evidence yet in this whole exercise
+   of pure run-to-run model variance for this specific case, rather than
+   anything in the prompt reliably causing or preventing it. No amount of
+   prompt wording will fully eliminate stochastic misses, but a worked
+   example (the technique with the best track record here) is a
+   reasonable attempt to shift the odds — added one to the Structural
+   correctness risk bullet using `billing.py` verbatim, framed positively
+   ("report this") rather than as an exclusion, plus an instruction to
+   actively compare function bodies when a diff adds multiple same-area
+   functions.
+
+2. **`performance-review/false_positive_trap` (`leaderboard.py`) failed a
+   second consecutive round**, despite an exclusion bullet that has named
+   this exact function, comment, and conclusion verbatim since round 1.
+   The model's own response this round explicitly acknowledged the count
+   is fixed at 3 and flagged it anyway — recognizing the fixed-size shape
+   didn't stop it from applying the general "N+1-shaped code is
+   reportable" instinct on top. Round 4's diagnosis (bullet-length
+   dilution) didn't hold up: this bullet's text was untouched by round 4's
+   trim. Applied the WRONG/RIGHT worked-example technique to this specific
+   exclusion for the first time (previously it was prose-only, unlike most
+   other exclusions in this project by now) — explicitly walking through
+   why acknowledging the N+1 shape and still not reporting it are
+   compatible.
+
+3. **`testing-coverage-review/false_positive_trap` continued into a third
+   distinct complaint** about the same test file across three rounds:
+   round 3 "boundary untested," round 4 "no value below the boundary,"
+   round 5 "test exercises the wrong branch" (i.e. objecting that the
+   boundary test's VIP customer receives the non-VIP rate — which is the
+   mathematically correct and only possible outcome for a value AT a
+   strict `>` boundary, not a defect). Each round's fix closed the specific
+   complaint and the model found an adjacent one attacking the same
+   underlying test from a new angle. Added a worked example showing the
+   CURRENT, complete three-test file as the definitive "no finding"
+   reference, explicit about there being no fourth value or "wrong branch"
+   framing left to invent.
+
+4. **`testing-coverage-review/true_positive` (`pricing.py`, no test file
+   at all) missed for the first time ever** — the plainest possible case
+   this agent exists to catch (new non-trivial logic, zero test diff).
+   Single data point, no structural hypothesis fits (the Strict scope
+   bullet itself is unchanged since 0.8.0, and the growth has all been in
+   Explicit exclusions, which govern what NOT to report — implausible that
+   more exclusion text would suppress this bullet's own positive
+   application). Treated as a likely stochastic single-sample miss rather
+   than a prompt defect, but added a worked example to the bullet anyway
+   (matching this exact fixture) as a low-risk reinforcement, consistent
+   with this project's growing evidence that worked examples outperform
+   descriptive prose for holding a verdict under live sampling variance.
+
+`tests/fixtures/cassettes.json` re-seeded (11 new placeholder entries) for
+the two agents touched this round. A sixth `--live` run is what tells us
+whether the two newly-added worked examples move `leaderboard.py` and
+`test_discounts.py`'s verdicts, or whether — like `data-integrity-review/
+boundary_case` before it — the underlying fixtures themselves need to
+change because the model's trained instinct on N+1-shaped loops and
+boundary-test skepticism is simply too strong to fully suppress in-context.
+
+### Sixth real `--live` run (2026-09-17): a genuine 23/23, and a cross-checkout reproducibility bug it exposed
+
+The sixth run reported **23/23 — the first fully clean pass across six
+rounds**, including the two cases round 5 flagged as likely stochastic
+(`data-integrity-review/true_positive_structural`, `testing-coverage-review/
+true_positive`) and both cases round 5 added its first-ever worked example
+to (`performance-review/false_positive_trap`'s `leaderboard.py`,
+`testing-coverage-review/false_positive_trap`'s `test_discounts.py`). That
+result is real: `RecordingReviewer` (`cli/tests/support/cassette.py`) always
+calls the live model unconditionally for every case in a `--live` run —
+there is no cache-hit skip path — so nothing about how the resulting
+cassette gets looked up afterward can retroactively make that run's verdicts
+any less genuine.
+
+What it does not automatically mean is that this repo's cassette now
+*replays* 23/23 in every environment, and checking that turned up a real,
+previously-invisible bug in the harness itself — not in any agent's prompt,
+and not in a fixture's expected behavior.
+
+**The bug.** Syncing the freshly-recorded `cassettes.json` (82 entries) into
+a second checkout and running plain (non-`--live`) replay produced 22/23,
+failing only on `data-integrity-review/true_positive_structural` with "No
+recorded response for 'billing.py'" — a hash miss, even though the cassette
+plainly contained a `billing.py` entry matching the sixth run's own reported
+finding text. Comparing the two checkouts' fixture files byte-for-byte found
+the cause: `_diff_for_new_file()` (`scripts/validate_fixtures.py`) shells out
+to `git diff --no-index`, which reads the working-tree file's raw bytes
+directly and — unlike a normal `git diff <ref>`, which does — does **not**
+apply the repository's `core.autocrlf`/`.gitattributes` text-conversion
+filters. On a Windows checkout with `core.autocrlf` converting these text
+fixtures to CRLF on disk (invisible to `git status`/`diff`, which apply that
+same filter and see the tracked LF content as unchanged), `--no-index`
+still sees the raw CRLF bytes. `request_key()` hashes the diff text verbatim,
+so the same logical fixture hashes differently depending on which checkout
+built the diff — a CRLF checkout's `--live` recording can never replay on an
+LF checkout, or vice versa, and the failure mode is a misleading "never
+recorded" rather than anything pointing at line endings.
+
+A full sweep of all 26 non-`EXPECTED.md` fixture files against a second
+checkout found this CRLF conversion present in effectively all of them —
+a repo-wide, invisible-to-git checkout property, not something specific to
+`billing.py`. Two files (`data-integrity-review/true_positive_structural/
+billing.py`, `security-review/boundary_case/handlers.py`) had also
+independently picked up one extra blank line before their top-level `def`
+each — identical in both files, consistent with an editor's on-save
+formatter applying PEP 8's two-blank-line convention the moment either file
+was ever opened locally, not a deliberate edit (`git log --follow` shows
+neither file touched since its original fixture commit). That extra line
+is a real content drift, not just line-ending noise, and shifts the
+line numbers `EXPECTED.md` names for both cases.
+
+**The fix.** `_diff_for_new_file()` now normalizes `\r\n` → `\n` in the diff
+text it returns, before that text is ever hashed or embedded in a cassette
+key — making the hash, and therefore cassette replay, independent of which
+checkout's line-ending behavior built it. Both drifted fixture files were
+restored to their originally-committed, single-blank-line content. Neither
+change touches an agent's prompt — the worked examples added across rounds
+2-5 are untouched, consistent with holding off on any prompt edits until a
+live run is confirmed to actually replay cleanly everywhere, not just where
+it was recorded. `run()`'s `--live` branch also now clears a stale
+"seeded from EXPECTED.md, not live-recorded" `_meta` note on a full
+(unfiltered) run — a smaller bug found alongside the main one: that note
+was set once by the very first `--seed-placeholders-from-expected` bootstrap
+and then persisted forever, including after this sixth run's fully-live
+82-entry recording, because no code path ever cleared it.
+
+**Confirmed.** A follow-up `--live` run from the same Windows checkout, now
+with the harness fix and both restored fixtures in place, again reported
+23/23 — and this time the resulting 84-entry cassette replayed 23/23
+independently in a second (Linux, LF) checkout with no fixture or code
+changes on that side, the first time in this project's history that a
+live-recorded cassette has replayed identically across two different
+checkouts' line-ending conventions. `billing.py`'s finding now reports
+line 6 (matching the restored single-blank-line file) instead of the
+line 8 the drifted extra-blank-line version produced. This is the
+strongest evidence yet — genuinely reproducible, not just self-reported —
+that every worked-example fix through round 5 holds under live sampling,
+on top of a harness bug that would otherwise have kept silently producing
+environment-dependent cassettes indefinitely.
+
 ### Structured output, budget management, and the feedback loop (implemented in 0.9.0)
 
 Three further production-readiness gaps were identified alongside the CI

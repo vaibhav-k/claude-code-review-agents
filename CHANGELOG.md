@@ -3,6 +3,56 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.9] — 2026-09-17
+
+The sixth real `--live` run reported the first fully clean 23/23 — but
+independently replaying that cassette in a second checkout caught a real
+harness bug the celebration would otherwise have papered over. No agent
+prompt changed in this release; the worked examples added through 0.9.7
+are untouched, per the standing instruction to hold off on any prompt
+trimming until a live run is confirmed to actually replay cleanly
+everywhere, not just where it was recorded.
+
+### Fixed
+
+- `scripts/validate_fixtures.py`'s `_diff_for_new_file()` shells out to
+  `git diff --no-index`, which reads a fixture's raw working-tree bytes and
+  — unlike a normal `git diff <ref>` — does not apply the repo's
+  `core.autocrlf`/`.gitattributes` text filters. On a checkout where
+  autocrlf silently converts these fixtures to CRLF on disk (invisible to
+  `git status`/`diff`, which do apply that filter), the diff text this
+  function returns — and therefore `request_key()`'s hash — differed
+  byte-for-byte from an LF checkout's, so a cassette recorded via `--live`
+  on one line-ending style silently failed to replay on the other with a
+  misleading "No recorded response" miss. Now normalizes `\r\n` → `\n`
+  before that text is ever hashed, making cassette replay independent of
+  which checkout produced it. See `DESIGN.md`'s sixth real `--live` run
+  write-up for the full investigation.
+- Two fixtures (`data-integrity-review/true_positive_structural/billing.py`,
+  `security-review/boundary_case/handlers.py`) had each independently
+  picked up one extra blank line before a top-level `def` — real content
+  drift, not just line-ending noise, almost certainly an editor's on-save
+  formatter applying PEP 8's two-blank-line convention the first time
+  either file was opened locally (`git log --follow` shows neither
+  touched since its original commit). Restored both to their originally
+  committed, single-blank-line content.
+- `run()`'s `--live` branch now clears a stale "seeded from EXPECTED.md,
+  not live-recorded" cassette `_meta` note on a full (unfiltered) run —
+  previously it was set once by the first `--seed-placeholders-from-expected`
+  bootstrap and never cleared afterward, so it kept claiming
+  placeholder-only data even after this round's fully-live 82-entry
+  recording. A `--agent`-scoped run still leaves it in place, since that
+  run doesn't cover the whole cassette.
+
+### Confirmed
+
+A follow-up `--live` run (same Windows checkout, now with this fix and
+both restored fixtures in place) again reported 23/23, and the resulting
+84-entry cassette replays 23/23 independently on a second (Linux, LF)
+checkout with zero changes on that side — the first cross-checkout-
+reproducible clean pass in this project's history. Committed as
+`tests/fixtures/cassettes.json`.
+
 ## [0.9.8] — 2026-09-17
 
 Docs-only update — no prompt, fixture, or code changes. The docs had
