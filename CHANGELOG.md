@@ -3,6 +3,161 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.0] — 2026-09-21
+
+Milestone 1 of the finding-lifecycle work: turns a one-shot review into
+something a CI pipeline can actually gate on across multiple runs,
+without changing anything about the tool for someone who doesn't opt in.
+
+### Added
+
+- **Stable rule IDs** (`rules.py`, new module) -- every finding now
+  carries a deterministic ID (e.g. `SEC-INJECTION-001`, or a
+  domain-level fallback like `DATA-GENERAL-001`) derived from the diff
+  text being reviewed, never from the model's own generated wording.
+  Exposed in `--json` as `rule_id` and as SARIF's `ruleId` (see "Changed"
+  below for the SARIF behavior change this implies). Deliberately a
+  fresh, standalone pattern table, not a refactor of `routing.py`'s
+  existing routing patterns -- see DESIGN.md for why sharing that state
+  would have been risky. Known, documented limitation: one rule ID per
+  file+agent, not per individual finding.
+- **Stable finding fingerprints** (`fingerprint.py`, new module) -- a
+  versioned sha256 (`FINGERPRINT_VERSION = "v1"`) of the rule ID, a
+  normalized repo-relative path, and a normalized title. Deliberately
+  excludes line number entirely (no unreliable "close enough" line-drift
+  heuristic -- the project's own preference for a false NEW over an
+  incorrectly-merged pair of different defects) and the model's
+  free-form `impact`/`fix` prose. Explicitly **not** claimed to be a
+  semantic identity -- DESIGN.md documents exactly what it can and can't
+  tell apart.
+- **Baseline file** (`baseline.py`, new module; default
+  `.agent-review/baseline.json`) -- `--baseline PATH` reads and
+  classifies this run's findings as `new`/`existing` against it and
+  never writes anything; `--update-baseline` explicitly (re)writes it,
+  atomically, from this run's full finding set (including currently
+  suppressed findings, so a later `ignore-findings.yml` change can't
+  make something look "new" again out of nowhere). A malformed or
+  unsupported-version baseline always errors loudly, including under
+  `--update-baseline` -- it is never silently treated as empty.
+- **`--new-only`** -- with a baseline, narrows the displayed/evaluated
+  finding set to just the `new`-classified ones. With no baseline, every
+  finding is already `new`, so this is a defined no-op.
+- **`--fail-on SEVERITY[,SEVERITY...]`** -- exits non-zero if any
+  finding in the (baseline/`--new-only`-filtered) display set is at or
+  above the given severity, reusing the existing four-tier severity
+  model. Independent of, and additive to, the pre-existing
+  `--fail-on-findings` flag, which keeps its exact original "fail if
+  anything was found at all" meaning.
+- `cli/tests/test_rules.py`, `test_fingerprint.py`, `test_baseline.py`,
+  and `test_cli_baseline_integration.py` -- unit and end-to-end coverage
+  for all of the above, including the spec's own worked example
+  (`--baseline ... --new-only --fail-on high` fails only on a genuinely
+  new HIGH+ finding, not a pre-existing one).
+
+### Changed
+
+- **SARIF `ruleId` now comes from the new rule-ID system, not
+  `finding.agent`.** Previously each SARIF rule was one specialist agent;
+  now it's the finding's rule ID (e.g. `SEC-INJECTION-001`), with the
+  specialist's identity preserved as `properties.agent` exactly as
+  before. This is the one user-visible behavior change in this release,
+  and it's spec-mandated -- SARIF's `ruleId` is meant to be a specific,
+  stable identifier for the kind of defect, which the new rule IDs
+  finally provide.
+- `to_sarif()` gained two new optional, default-off parameters
+  (`baseline`, `new_only`) rather than a second SARIF writer; each result
+  gains SARIF's native `baselineState` (`new`/`unchanged`) only when a
+  baseline was supplied.
+- `--json` output is purely additive: every finding gains `rule_id` and
+  `fingerprint`; `status` appears only when `--baseline` was used.
+- `Finding` gained a `rule_id: str = ""` field, defaulted so every
+  existing direct-construction call site (test fixtures included) keeps
+  working unchanged.
+
+### Fixed
+
+- **A real, previously latent cache-attribution bug.** `.agent-cache/`
+  stored every routed agent's response text for a file merged into one
+  string, replayed on a cache hit under the placeholder agent name
+  `"cached"` -- harmless while nothing depended on the real agent name,
+  but once rule IDs (and therefore fingerprints) started depending on
+  it, a cache-hit replay of the identical finding got a *different* rule
+  ID than the original live call did, for the single most common
+  repeat-run scenario. Caught by a real failing test written for this
+  milestone, not by inspection. Fixed by storing `dict[agent, raw_text]`
+  per file instead of one merged blob (`CACHE_SCHEMA_VERSION` 1 → 2 -- an
+  old version-1 manifest is simply treated as empty and repopulated, the
+  same no-migration mechanism this cache has always used for a schema
+  bump).
+- **Two super-linear regexes, caught by review of this milestone's own
+  new/touched code.** `findings._HEADER_RE`'s unbounded `\S+`
+  (`location`) and three unbounded `\s*` runs could be forced into O(n)
+  backtracking by a single malformed line with a long non-whitespace run
+  and no `-`/`—` anywhere in it. `fingerprint._TRAILING_PUNCT_RE`
+  (`r"[.\s]+$"`, used by `normalize_title`) was worse: run via `.sub()`
+  against a string that doesn't end in a match, the engine retries the
+  same greedy-then-backtrack dance from every dot/whitespace position,
+  not just the true suffix -- O(n²) overall for an adversarial input like
+  a long run of dots followed by one non-dot character. Fixed by bounding
+  every quantifier in `_HEADER_RE` except `title` (which needs none --
+  it's the last group before the end anchor, so it always resolves in
+  one pass) to a small constant (`\s{0,4}`, `\S{1,300}`) with zero
+  behavior change for any realistic input, and by replacing
+  `_TRAILING_PUNCT_RE` with a plain right-to-left character scan
+  (`fingerprint._rstrip_dots_and_space`) that inspects each character at
+  most once, with no backtracking possible even in principle. Both
+  verified directly: a 200,000-character adversarial input for each now
+  resolves in well under a second (regression tests in `test_findings.py`
+  and `test_fingerprint.py` pin the boundary and the fast-fail time).
+- **`orchestrator.run_review`'s Cognitive Complexity (18) exceeded this
+  project's linter threshold (15).** Split into four single-purpose
+  helpers (`_route_changed_files`, `_apply_file_budget`,
+  `_run_routed_reviews`, `_apply_suppressions`), each taking over one
+  loop/branch that was previously nested inside `run_review` itself,
+  which is now a flat, linear sequence of calls with no branching of its
+  own. Pure refactor -- behavior is unchanged and fully covered by the
+  existing test suite (verified: no test needed to change).
+- **A real cache-vs-live ordering mismatch, caught by a genuine CI
+  failure (GitHub Actions, Python 3.10/3.11/3.12), not by inspection.**
+  `test_second_run_is_a_pure_cache_hit_with_no_further_reviewer_calls`
+  failed because a cache-hit replay's two findings (same severity, same
+  location, from two different specialists) came back in the OPPOSITE
+  order from the live call that originally produced them, even though
+  both runs found exactly the same two findings. Root cause:
+  `findings.sort_findings`'s key was only `(severity, location)` --
+  two findings that tie on both fall back to Python's stable-sort
+  behavior of preserving whatever order they arrived in, which is not
+  itself guaranteed consistent across this project's own call sites. The
+  live path builds its list in `agents_for_file`'s routing order; a
+  cache-hit replay iterates `cache.get_if_fresh()`'s `per_agent` dict,
+  whose key order survives a save/load round trip through
+  `json.dumps(..., sort_keys=True)` alphabetically (`cache.py`'s
+  `save()`) -- a real, reproducible reordering (confirmed directly: a
+  dict inserted as `{"security-review": ..., "performance-review":
+  ...}` comes back as `{"performance-review": ..., "security-review":
+  ...}` after one save/load cycle), not a flake. This was only ever
+  latent in schema version 1 too -- it just never had a `per_agent` dict
+  to reorder, since v1 stored one merged string per file instead. Fixed
+  at the actual source: `sort_findings`'s key is now `(severity,
+  location, title, agent)`, fully specified so two findings sort
+  identically regardless of what order they arrived in -- verified with
+  a test that sorts the same two tied findings in both possible input
+  orders and asserts identical output either way, and confirmed against
+  the exact cache round trip that surfaced this.
+
+### Notes
+
+- `python scripts/validate_fixtures.py` was run as part of this
+  milestone's own validation and reported 0/23 in the working tree at
+  the time; `cli/tests/test_cli_integration_live.py`'s two replay tests
+  also failed. Both confirmed, via a disposable clean checkout of the
+  prior commit, to be entirely caused by already-uncommitted, unrelated
+  edits (most notably an in-progress `CLAUDE.md` / `default_rules/`
+  change) that predate this milestone and are outside its scope to fix
+  -- both pass cleanly (23/23, and 2/2) at that clean checkout. See
+  DESIGN.md's "Finding lifecycle and CI policy" section for the full
+  root-cause writeup. Not a regression introduced by this release.
+
 ## [0.10.3] — 2026-09-21
 
 GitHub Actions ran `cli-ci.yml` on the pushed 0.10.0–0.10.2 batch across

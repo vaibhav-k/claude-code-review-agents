@@ -1,5 +1,6 @@
 import dataclasses
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -148,3 +149,43 @@ def test_compute_returns_a_64_char_hex_sha256_digest():
     fp = fingerprint.compute(_BASE)
     assert len(fp) == 64
     int(fp, 16)  # raises ValueError if not valid hex
+
+
+def test_rstrip_dots_and_space_matches_the_former_regex_semantics():
+    # normalize_title() used to strip trailing "[.\\s]+" via a regex;
+    # _rstrip_dots_and_space() replaced it with a manual scan for
+    # performance (see that function's own docstring) -- these cases
+    # pin down that the observable behavior didn't change.
+    assert fingerprint._rstrip_dots_and_space("hello...") == "hello"
+    assert fingerprint._rstrip_dots_and_space("hello.  .\t\n") == "hello"
+    assert fingerprint._rstrip_dots_and_space("hello") == "hello"
+    assert fingerprint._rstrip_dots_and_space("...") == ""
+    assert fingerprint._rstrip_dots_and_space("") == ""
+    # Non-ASCII whitespace (str.isspace(), same scope re's \s covers for
+    # str patterns) must still be stripped, not just plain ASCII spaces.
+    # Built with chr() (NO-BREAK SPACE, EM SPACE) rather than a literal
+    # character in the source, so there's no ambiguous-looking glyph here.
+    non_ascii_ws = "hello" + chr(0xA0) + "." + chr(0x2003)
+    assert fingerprint._rstrip_dots_and_space(non_ascii_ws) == "hello"
+    # A dot/space in the MIDDLE must never be touched -- this is rstrip,
+    # not strip.
+    assert fingerprint._rstrip_dots_and_space("a.b. c ") == "a.b. c"
+
+
+def test_pathological_title_normalizes_fast_instead_of_quadratically():
+    # Regression guard for the former `re.sub(r"[.\\s]+$", "", ...)`: a
+    # long run of dots immediately followed by one non-dot character is
+    # the exact shape that made the old regex O(n^2) -- the string never
+    # ends in a match at all (it ends in "x"), so `[.\s]+$` retried the
+    # same greedy-then-backtrack dance from every one of the 200,000 dot
+    # positions before giving up. There is nothing to strip here (the
+    # string doesn't end in "."/whitespace), so the correct result is the
+    # string unchanged -- the manual scan confirms that by checking only
+    # the last character once, not by scanning/backtracking through the
+    # whole run.
+    title = ("." * 200_000) + "x"
+    start = time.monotonic()
+    result = fingerprint.normalize_title(title)
+    elapsed = time.monotonic() - start
+    assert result == title
+    assert elapsed < 0.5
