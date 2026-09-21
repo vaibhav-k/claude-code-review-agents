@@ -67,26 +67,32 @@ def test_findings_become_results_with_matching_rules():
     log = to_sarif(run)
     sarif_run = log["runs"][0]
 
+    # _SQLI/_DUP_LOGIC are hand-built Findings with no rule_id set (see
+    # module-level fixtures above), so each falls back through
+    # rules.effective_rule_id() to that agent's domain-general id -- no
+    # diff text is available here to narrow it further. This is the
+    # milestone 1 change: ruleId is now the finding's stable rule_id, not
+    # the reviewing agent's name (still preserved in properties.agent
+    # below) -- see sarif.py's module docstring.
     rule_ids = [r["id"] for r in sarif_run["tool"]["driver"]["rules"]]
-    assert rule_ids == [
-        "security-review",
-        "data-integrity-review",
-    ]  # CRITICAL sorts first
+    assert rule_ids == ["SEC-GENERAL-001", "DATA-GENERAL-001"]  # CRITICAL sorts first
 
     results = sarif_run["results"]
     assert len(results) == 2
 
-    sqli_result = next(r for r in results if r["ruleId"] == "security-review")
+    sqli_result = next(r for r in results if r["ruleId"] == "SEC-GENERAL-001")
     location = sqli_result["locations"][0]["physicalLocation"]
     assert sqli_result["level"] == "error"  # CRITICAL -> error
     assert sqli_result["properties"]["severity"] == "CRITICAL"
+    assert sqli_result["properties"]["agent"] == "security-review"
     assert location["artifactLocation"]["uri"] == "handlers.py"
     assert location["region"]["startLine"] == 4
     assert "SQL injection" in sqli_result["message"]["text"]
     assert "Fix:" in sqli_result["message"]["text"]
 
-    dup_result = next(r for r in results if r["ruleId"] == "data-integrity-review")
+    dup_result = next(r for r in results if r["ruleId"] == "DATA-GENERAL-001")
     assert dup_result["level"] == "warning"  # MEDIUM -> warning
+    assert dup_result["properties"]["agent"] == "data-integrity-review"
 
 
 def test_rule_index_matches_the_rules_array_position():
@@ -161,7 +167,7 @@ def test_cached_agent_gets_documented_fallback_rule():
     )
     run = _run([_file("a.py", agents=["cached"], from_cache=True, findings=[cached_finding])])
     rules = to_sarif(run)["runs"][0]["tool"]["driver"]["rules"]
-    assert rules[0]["id"] == "cached"
+    assert rules[0]["id"] == "CACHED-GENERIC-001"
     assert "cache" in rules[0]["shortDescription"]["text"].lower()
 
 
