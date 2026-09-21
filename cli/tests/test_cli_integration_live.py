@@ -107,6 +107,7 @@ def reviewer_and_cassette():
         _real_load_dotenv_if_present()
 
         from agent_review.agents_client import AnthropicFoundryReviewer  # noqa: PLC0415
+
         # -- deliberately deferred, same reasoning as agents_client.py's own
         # lazy `anthropic`/`azure.identity` imports: keeps a missing
         # `anthropic` package (or unset Foundry credentials) from breaking
@@ -140,7 +141,11 @@ def test_run_review_finds_the_injection_and_clears_the_safe_query(reviewer_and_c
     cache = AgentCache(repo)
 
     run = run_review(
-        repo, base_ref=None, prompts=prompts, cache=cache, reviewer=reviewer_and_cassette
+        repo,
+        base_ref=None,
+        prompts=prompts,
+        cache=cache,
+        reviewer=reviewer_and_cassette,
     )
 
     by_path = {f.path: f for f in run.files}
@@ -161,7 +166,11 @@ def test_second_run_is_a_pure_cache_hit_with_no_further_reviewer_calls(
 
     cache1 = AgentCache(repo)
     run1 = run_review(
-        repo, base_ref=None, prompts=prompts, cache=cache1, reviewer=reviewer_and_cassette
+        repo,
+        base_ref=None,
+        prompts=prompts,
+        cache=cache1,
+        reviewer=reviewer_and_cassette,
     )
     assert run1.cache_misses == 1
 
@@ -170,7 +179,11 @@ def test_second_run_is_a_pure_cache_hit_with_no_further_reviewer_calls(
     # identically whether reviewer_and_cassette is in replay or record mode.
     cache2 = AgentCache(repo)
     run2 = run_review(
-        repo, base_ref=None, prompts=prompts, cache=cache2, reviewer=reviewer_and_cassette
+        repo,
+        base_ref=None,
+        prompts=prompts,
+        cache=cache2,
+        reviewer=reviewer_and_cassette,
     )
     assert run2.cache_hits == 1
     assert run2.cache_misses == 0

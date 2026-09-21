@@ -24,7 +24,7 @@ stay at 8 total — see it for the full requirement.
 
 **Evidence bar**
 
-Can this pattern clear the five-point evidence bar in `CLAUDE.md` (concrete
+Can this pattern clear the six-point evidence bar in `CLAUDE.md` (concrete
 path, plausible trigger, causal link to the diff, meaningful impact,
-specific fix)? If it can only be described as "might be a problem," it
-likely isn't ready to become an agent rule yet.
+specific fix, discriminating power)? If it can only be described as "might
+be a problem," it likely isn't ready to become an agent rule yet.

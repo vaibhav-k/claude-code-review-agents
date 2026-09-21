@@ -74,12 +74,12 @@ CLI_TESTS = REPO_ROOT / "cli" / "tests"
 sys.path.insert(0, str(CLI_SRC))
 sys.path.insert(0, str(CLI_TESTS))
 
-from agent_review import findings as findings_mod  # noqa: E402
-from agent_review.agents_client import AnthropicFoundryReviewer  # noqa: E402
-from agent_review.cli import _load_dotenv_if_present  # noqa: E402
-from agent_review.orchestrator import build_review_user_message  # noqa: E402
-from agent_review.prompts import AgentPrompt, load_agent_prompts  # noqa: E402
-from support.cassette import (  # noqa: E402
+from agent_review import findings as findings_mod
+from agent_review.agents_client import AnthropicFoundryReviewer
+from agent_review.cli import _load_dotenv_if_present
+from agent_review.orchestrator import build_review_user_message
+from agent_review.prompts import AgentPrompt, load_agent_prompts
+from support.cassette import (
     Cassette,
     CassetteMissError,
     CassetteReviewer,
@@ -215,7 +215,10 @@ def _check_verdict(verdict: str, agent: str, raw_response: str) -> tuple[bool, s
         # catch, not paper over (see CLAUDE.md's Output Contract section).
         if stripped == findings_mod.NO_FINDINGS_TEXT:
             return True, "no finding, as expected"
-        return False, f"expected exactly {findings_mod.NO_FINDINGS_TEXT!r}, got: {stripped[:200]!r}"
+        return (
+            False,
+            f"expected exactly {findings_mod.NO_FINDINGS_TEXT!r}, got: {stripped[:200]!r}",
+        )
     return False, f"unknown verdict {verdict!r} in manifest.json"
 
 
@@ -231,7 +234,9 @@ def _seed_placeholders(manifest: list[dict[str, str]]) -> None:
             print(f"skip {agent_name}/{case}: no loaded prompt for {agent_name!r}")
             continue
         diff_text, filenames = build_case_diff(case_dir)
-        user_message = build_review_user_message(f"Files: {', '.join(filenames)}", diff_text)
+        user_message = build_review_user_message(
+            f"Files: {', '.join(filenames)}", diff_text
+        )
         key = request_key(agent.system_prompt, user_message)
         if cassette.get(key) is not None:
             continue  # never overwrite an existing (possibly real) entry
@@ -239,7 +244,9 @@ def _seed_placeholders(manifest: list[dict[str, str]]) -> None:
         if verdict in _MUST_FIRE_VERDICTS:
             block = _extract_expected_finding_block(expected_md)
             if block is None:
-                print(f"warn {agent_name}/{case}: must_fire but EXPECTED.md has no finding block to seed from")
+                print(
+                    f"warn {agent_name}/{case}: must_fire but EXPECTED.md has no finding block to seed from"
+                )
                 continue
             response = block
         else:
@@ -254,13 +261,16 @@ def _seed_placeholders(manifest: list[dict[str, str]]) -> None:
         "real prompt regression."
     )
     cassette.save()
-    print(f"Seeded {seeded} new placeholder entries ({len(cassette)} total) into {CASSETTE_PATH}")
+    print(
+        f"Seeded {seeded} new placeholder entries ({len(cassette)} total) into {CASSETTE_PATH}"
+    )
 
 
 def _filter_manifest_by_agent(
     manifest: list[dict[str, str]], agent_name: str | None
 ) -> list[dict[str, str]] | None:
-    """The `--agent NAME` filter, split out of run() so an empty result
+    """
+    The `--agent NAME` filter, split out of run() so an empty result
     (a typo'd or unknown agent name) is one early return here instead of
     another branch for run() itself to carry. None means "no matching
     entries" -- the error is already printed, caller just exits 2.
@@ -275,7 +285,8 @@ def _filter_manifest_by_agent(
 
 
 def _build_reviewer(cassette: Cassette, live: bool) -> Reviewer:
-    """Picks live-recording vs. replay, and prints the placeholder-data
+    """
+    Picks live-recording vs. replay, and prints the placeholder-data
     NOTE (only relevant in replay mode -- a live run doesn't consume
     placeholder data, it overwrites it).
     """
@@ -289,7 +300,8 @@ def _build_reviewer(cassette: Cassette, live: bool) -> Reviewer:
 def _run_one_case(
     entry: dict[str, str], prompts: dict[str, AgentPrompt], reviewer: Reviewer
 ) -> CaseResult:
-    """One manifest entry, start to finish: load its prompt, build its
+    """
+    One manifest entry, start to finish: load its prompt, build its
     diff, call the reviewer, check the verdict. Split out of run()'s loop
     body so a missing prompt or a cassette miss is a plain early return
     here, not another nested branch inside run()'s own loop.
@@ -297,11 +309,15 @@ def _run_one_case(
     agent_name, case, verdict = entry["agent"], entry["case"], entry["verdict"]
     agent = prompts.get(agent_name)
     if agent is None:
-        return CaseResult(agent_name, case, verdict, False, f"no loaded prompt for {agent_name!r}")
+        return CaseResult(
+            agent_name, case, verdict, False, f"no loaded prompt for {agent_name!r}"
+        )
 
     case_dir = FIXTURES_DIR / agent_name / case
     diff_text, filenames = build_case_diff(case_dir)
-    user_message = build_review_user_message(f"Files: {', '.join(filenames)}", diff_text)
+    user_message = build_review_user_message(
+        f"Files: {', '.join(filenames)}", diff_text
+    )
     try:
         raw = reviewer.complete(agent.system_prompt, user_message)
     except CassetteMissError as exc:
@@ -314,7 +330,8 @@ def _run_one_case(
 def _run_all_cases(
     manifest: list[dict[str, str]], prompts: dict[str, AgentPrompt], reviewer: Reviewer
 ) -> list[CaseResult]:
-    """Runs every case in manifest order, printing a progress marker before
+    """
+    Runs every case in manifest order, printing a progress marker before
     each one starts and its PASS/FAIL result the instant it finishes --
     rather than running the whole manifest silently and only printing once
     everything is done. This matters most in --live mode: each case is a
@@ -338,7 +355,8 @@ def _run_all_cases(
 
 
 def _summarize_results(results: list[CaseResult]) -> list[CaseResult]:
-    """Prints the final pass-count summary and returns just the failures so
+    """
+    Prints the final pass-count summary and returns just the failures so
     run() can decide its exit code without re-deriving that list itself.
     Per-case PASS/FAIL lines are printed as each case finishes -- see
     _run_all_cases -- not batched here.
@@ -349,7 +367,9 @@ def _summarize_results(results: list[CaseResult]) -> list[CaseResult]:
 
 
 def run(args: argparse.Namespace) -> int:
-    manifest: list[dict[str, str]] = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest: list[dict[str, str]] = json.loads(
+        MANIFEST_PATH.read_text(encoding="utf-8")
+    )
     filtered_manifest = _filter_manifest_by_agent(manifest, args.agent)
     if filtered_manifest is None:
         return 2
@@ -396,9 +416,13 @@ def main() -> int:
     # cli.py: never overrides a variable already set in the real
     # environment, silently skipped if python-dotenv isn't installed.
     _load_dotenv_if_present()
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
-        "--agent", default=None, help="Only run cases for this agent (e.g. security-review)."
+        "--agent",
+        default=None,
+        help="Only run cases for this agent (e.g. security-review).",
     )
     parser.add_argument(
         "--live",

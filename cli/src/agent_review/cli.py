@@ -43,8 +43,9 @@ from .healing import (
     run_tests,
 )
 from .init import init_repo
-from .orchestrator import ReviewRun, run_review
+from .orchestrator import FileReviewResult, ReviewRun, run_review
 from .prompts import load_agent_prompts
+from .sarif import to_sarif
 from .suppressions import SUPPRESSIONS_PATH
 
 _REVIEW_CMD = "review"
@@ -74,7 +75,7 @@ def _load_dotenv_if_present() -> None:
     over a nice-to-have.
     """
     try:
-        from dotenv import find_dotenv, load_dotenv  # noqa: PLC0415 -- optional,
+        from dotenv import find_dotenv, load_dotenv  # noqa: PLC0415
 
         # deferred so a missing python-dotenv can never break commands
         # that don't need .env support at all (e.g. --help).
@@ -103,62 +104,114 @@ def _build_reviewer(args: argparse.Namespace) -> AnthropicFoundryReviewer:
         raise SystemExit(f"error: {exc}") from exc
 
 
-def _print_review(run: ReviewRun) -> None:
-    print(f"Base ref: {run.base_ref}")
-    print(
-        f"Files analyzed: {len(run.files)}  "
-        f"(cache hits: {run.cache_hits}, cache misses: {run.cache_misses})"
-    )
-    failed = run.failed_files
-    if failed:
-        print(f"Failed to review {len(failed)} file(s) (not cached -- will retry next run):")
-        for f in failed:
-            print(f"  {f.path}: {f.error}")
+# _print_review used to be one flat function with seven independent
+# "if there's something to report, print a header then loop over it"
+# blocks in a row -- functionally simple (each block is independent of
+# every other), but each `if ...: \n for ...:` pair nests a loop inside a
+# branch, which is exactly what SonarQube's Cognitive Complexity metric
+# penalizes hardest (a nested loop costs its base score *plus* one for
+# every enclosing branch/loop). That pushed the single function to a
+# score of 20 against the project's allowed 15, even though there was
+# never any real interaction between the seven blocks for a reader to
+# hold in their head at once.
+#
+# The fix is the standard one for exactly this shape: give each
+# independent block its own function with a guard-clause early return
+# (`if not x: return`) instead of a positive `if x:` wrapping the rest of
+# the body. That turns "loop nested inside a branch" into "loop that
+# follows a guard clause at the same nesting level," which is what
+# collapses each helper's own score to 2 (guard `if` + flat `for`) and
+# _print_review itself to a plain, branch-free sequence of calls. Pure
+# refactor -- every helper below prints exactly what its inlined block
+# used to, so `cmd_review`'s stdout is byte-for-byte unchanged; the
+# existing capsys-based CLI integration tests are what confirm that.
+
+
+def _print_failed_files(failed: list[FileReviewResult]) -> None:
+    if not failed:
+        return
+    print(f"Failed to review {len(failed)} file(s) (not cached -- will retry next run):")
+    for f in failed:
+        print(f"  {f.path}: {f.error}")
+
+
+def _print_missing_agents(run: ReviewRun) -> None:
     missing = sorted({(f.path, agent) for f in run.files for agent in f.missing_agents})
-    if missing:
-        print(
-            f"Warning: {len(missing)} routed specialist(s) had no loaded prompt and were skipped:"
-        )
-        for path, agent in missing:
-            print(f"  {path}: {agent}")
+    if not missing:
+        return
+    print(f"Warning: {len(missing)} routed specialist(s) had no loaded prompt and were skipped:")
+    for path, agent in missing:
+        print(f"  {path}: {agent}")
+
+
+def _print_malformed_agents(run: ReviewRun) -> None:
     malformed = sorted({(f.path, agent) for f in run.files for agent in f.malformed_agents})
-    if malformed:
-        print(
-            f"Warning: {len(malformed)} specialist call(s) returned a response "
-            "that didn't match the expected output format -- not cached, will "
-            "retry next run, but this diff was NOT actually reviewed by them "
-            "this time:"
-        )
-        for path, agent in malformed:
-            print(f"  {path}: {agent}")
+    if not malformed:
+        return
+    print(
+        f"Warning: {len(malformed)} specialist call(s) returned a response "
+        "that didn't match the expected output format -- not cached, will "
+        "retry next run, but this diff was NOT actually reviewed by them "
+        "this time:"
+    )
+    for path, agent in malformed:
+        print(f"  {path}: {agent}")
+
+
+def _print_truncated_files(run: ReviewRun) -> None:
     truncated = sorted(f.path for f in run.files if f.truncated)
-    if truncated:
-        print(
-            f"Note: {len(truncated)} file(s) had a diff too large to send in full "
-            "-- only a truncated prefix was reviewed:"
-        )
-        for path in truncated:
-            print(f"  {path}")
-    if run.skipped_for_budget:
-        print(
-            f"Note: {len(run.skipped_for_budget)} file(s) were skipped due to "
-            "--max-files and were not reviewed at all this run:"
-        )
-        for path in run.skipped_for_budget:
-            print(f"  {path}")
-    if run.suppressed:
-        print(
-            f"Note: {len(run.suppressed)} finding(s) suppressed by {SUPPRESSIONS_PATH.as_posix()}:"
-        )
-        for s in run.suppressed:
-            print(f"  {s.path}: [{s.finding.severity}] {s.finding.location} — {s.reason}")
-    print()
+    if not truncated:
+        return
+    print(
+        f"Note: {len(truncated)} file(s) had a diff too large to send in full "
+        "-- only a truncated prefix was reviewed:"
+    )
+    for path in truncated:
+        print(f"  {path}")
+
+
+def _print_skipped_for_budget(run: ReviewRun) -> None:
+    if not run.skipped_for_budget:
+        return
+    print(
+        f"Note: {len(run.skipped_for_budget)} file(s) were skipped due to "
+        "--max-files and were not reviewed at all this run:"
+    )
+    for path in run.skipped_for_budget:
+        print(f"  {path}")
+
+
+def _print_suppressed(run: ReviewRun) -> None:
+    if not run.suppressed:
+        return
+    print(f"Note: {len(run.suppressed)} finding(s) suppressed by {SUPPRESSIONS_PATH.as_posix()}:")
+    for s in run.suppressed:
+        print(f"  {s.path}: [{s.finding.severity}] {s.finding.location} — {s.reason}")
+
+
+def _print_findings(run: ReviewRun) -> None:
     if not run.all_findings:
         print("No high-impact issues found.")
         return
     for finding in run.all_findings:
         print(finding.render())
         print()
+
+
+def _print_review(run: ReviewRun) -> None:
+    print(f"Base ref: {run.base_ref}")
+    print(
+        f"Files analyzed: {len(run.files)}  "
+        f"(cache hits: {run.cache_hits}, cache misses: {run.cache_misses})"
+    )
+    _print_failed_files(run.failed_files)
+    _print_missing_agents(run)
+    _print_malformed_agents(run)
+    _print_truncated_files(run)
+    _print_skipped_for_budget(run)
+    _print_suppressed(run)
+    print()
+    _print_findings(run)
 
 
 def _review_run_to_dict(run: ReviewRun) -> dict:
@@ -217,7 +270,9 @@ def cmd_review(args: argparse.Namespace) -> int:
         # Surface API/network failures cleanly, not as a raw traceback
         # from inside a worker thread.
         raise SystemExit(f"error: review failed: {exc}") from exc
-    if args.json:
+    if args.sarif:
+        print(json.dumps(to_sarif(run), indent=2))
+    elif args.json:
         print(json.dumps(_review_run_to_dict(run), indent=2))
     else:
         _print_review(run)
@@ -401,13 +456,25 @@ def build_review_parser() -> argparse.ArgumentParser:
             "commit) rather than for everyday use."
         ),
     )
-    review.add_argument(
+    output_format = review.add_mutually_exclusive_group()
+    output_format.add_argument(
         "--json",
         action="store_true",
         help=(
             "Print findings (and the same warnings the default output shows) as "
             "JSON instead of human-readable text, for CI/CD pipelines to consume "
             "programmatically instead of parsing this tool's own text output."
+        ),
+    )
+    output_format.add_argument(
+        "--sarif",
+        action="store_true",
+        help=(
+            "Print findings as a SARIF 2.1.0 log instead of human-readable text "
+            "-- the format GitHub code scanning, Azure DevOps, and most CI "
+            "security dashboards expect, for inline PR annotations and a "
+            "persistent alerts list instead of a build-log-only report. "
+            "Mutually exclusive with --json."
         ),
     )
     review.set_defaults(func=cmd_review)

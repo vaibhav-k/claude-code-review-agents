@@ -102,7 +102,7 @@ register the console scripts on their own:
 
 ```bash
 pip install -r requirements.txt        # runtime only
-pip install -r requirements-dev.txt    # + pytest, ruff, mypy
+pip install -r requirements-dev.txt    # + pytest, ruff, mypy, and the rest of pyproject.toml's dev extra
 ```
 
 ### If your editor shows "Import agent_review could not be resolved"
@@ -151,6 +151,12 @@ agent-review review --path /path/to/some/repo --base origin/main --fail-on-findi
 # blowing the budget; skipped files are reported, not silently dropped,
 # and get picked up on a later run once the file set fits under the cap).
 agent-review review --path /path/to/some/repo --max-files 50
+
+# Emit a SARIF 2.1.0 log instead of human-readable text -- pipe this to a
+# file and upload it with github/codeql-action/upload-sarif (or your CI's
+# equivalent) for inline PR annotations and a persistent alerts list.
+# Mutually exclusive with --json (see cli.build_review_parser).
+agent-review review --path /path/to/some/repo --sarif > results.sarif
 
 # Generate a commit message for what's currently staged (no co-author trailer).
 agent-review commit --path /path/to/some/repo

@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from agent_review import cli
@@ -105,6 +107,38 @@ def test_json_flag_emits_structured_findings_instead_of_text(monkeypatch, tmp_pa
     finding = payload["findings"][0]
     assert finding["severity"] == "CRITICAL"
     assert "SQL injection" in finding["title"]
+
+
+def test_sarif_flag_emits_a_valid_sarif_log_instead_of_text(monkeypatch, tmp_path, capsys):
+    repo = make_repo(tmp_path)
+    (repo / "handlers.py").write_text(
+        "def get_user(request):\n"
+        '    user_id = request.args.get("id")\n'
+        '    query = f"SELECT * FROM users WHERE id = {user_id}"\n'
+        "    return db.execute(query).fetchone()\n"
+    )
+    monkeypatch.setattr(cli, "AnthropicFoundryReviewer", FakeReviewer)
+
+    exit_code = cli.main(["--path", str(repo), "--jobs", "1", "--sarif"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+
+    log = json.loads(out)  # must be the ONLY thing on stdout, and valid JSON
+    assert log["version"] == "2.1.0"
+    sarif_run = log["runs"][0]
+    assert sarif_run["tool"]["driver"]["name"] == "agent-review"
+    result = sarif_run["results"][0]
+    assert result["ruleId"] == "security-review"
+    assert result["level"] == "error"  # CRITICAL -> error
+    assert "SQL injection" in result["message"]["text"]
+
+
+def test_json_and_sarif_flags_are_mutually_exclusive(tmp_path):
+    repo = make_repo(tmp_path)
+    parser = cli.build_review_parser()
+    with pytest.raises(SystemExit) as exc_info:
+        parser.parse_args(["review", "--path", str(repo), "--json", "--sarif"])
+    assert exc_info.value.code == 2  # argparse's usage-error exit code
 
 
 def test_max_files_flag_skips_lower_priority_files_and_reports_them(monkeypatch, tmp_path, capsys):

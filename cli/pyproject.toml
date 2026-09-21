@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-review"
-version = "0.9.14"
+version = "0.10.3"
 description = "Evidence-based automated code review, staged-diff commit messages, and guarded self-healing for any git repository. Talks to Claude exclusively via Microsoft Foundry (Azure AI Foundry)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,6 +43,19 @@ dev = [
     # PyYAML ships no inline type hints -- without its stub package mypy
     # reports "Library stubs not installed for 'yaml'" on suppressions.py.
     "types-PyYAML>=6.0",
+    # Only used by test_sarif_schema_validation.py, to validate a
+    # generated SARIF log against the real, bundled SARIF 2.1.0 schema
+    # (tests/support/sarif-schema-2.1.0.json) -- that test uses
+    # pytest.importorskip("jsonschema") specifically so a dev environment
+    # missing this one optional package skips that single test instead of
+    # failing collection for the whole suite.
+    "jsonschema>=4.0",
+    # Only used by test_requirements_sync.py, to parse this very file and
+    # confirm requirements.txt/requirements-dev.txt actually mirror it --
+    # tomllib is stdlib from 3.11 on, but this project's own
+    # requires-python floor is 3.10 (and cli-ci.yml's test matrix includes
+    # it), so the backport is needed to run that test there at all.
+    "tomli>=2.0; python_version < \"3.11\"",
 ]
 
 [project.scripts]

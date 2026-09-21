@@ -40,12 +40,17 @@ agent's scope:
 
 ## Every finding needs the same evidence bar
 
-Don't add "nice to catch" patterns that can't clear the five-point evidence
+Don't add "nice to catch" patterns that can't clear the six-point evidence
 bar in `CLAUDE.md` (path exists, trigger is plausible, causal link to the
-diff, meaningful impact, specific fix). If a pattern can only be flagged
-with a hedge ("this might be a problem if..."), it doesn't belong in an
-agent's scope — false negatives are the acceptable failure mode here, not
-speculative false positives.
+diff, meaningful impact, specific fix, discriminating power). If a pattern
+can only be flagged with a hedge ("this might be a problem if..."), it
+doesn't belong in an agent's scope — false negatives are the acceptable
+failure mode here, not speculative false positives. The sixth point,
+discriminating power, is the one most new contributions accidentally
+violate: before proposing a finding as a "second" instance of a gap
+another case already covers, confirm it actually reaches a different code
+path or produces a different outcome — see `CLAUDE.md`'s own Evidence Bar
+section for the worked examples.
 
 ## Every change should widen or narrow scope, never both at once
 
@@ -55,7 +60,7 @@ simultaneously is very hard to review for overlap — split it.
 
 ## When a live `--live` run disagrees with `EXPECTED.md`
 
-This has happened repeatedly (see `DESIGN.md`'s five "real `--live` run"
+This has happened repeatedly (see `DESIGN.md`'s six "real `--live` run"
 write-ups) and the same two lessons keep paying off:
 
 - **A worked example beats more descriptive prose.** When a live model's

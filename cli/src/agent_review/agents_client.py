@@ -34,6 +34,18 @@ from typing import Any, Protocol
 # catalog aren't guaranteed to match.
 DEFAULT_MODEL = "claude-sonnet-5"
 MAX_TOKENS = 1024
+# 2026-09-21: tried pinning a TEMPERATURE constant here to reduce live-call
+# sampling variance (see DESIGN.md's "Pinning temperature" write-up for the
+# motivation), and reverted it within the hour -- the installed `anthropic`
+# SDK's Messages.create() has no `temperature`, `top_p`, or `top_k`
+# parameter at all (verified via inspect.signature(), not assumed; grepping
+# the whole installed package for "temperature" turns up zero references).
+# This API generation's closest analog is `output_config={"effort": ...}`
+# (`low`/`medium`/`high`/`xhigh`/`max`), which is a reasoning-effort dial,
+# not a sampling-determinism control, and isn't a substitute. There is
+# currently no lever in this codebase for reducing sampling variance below
+# whatever the API applies by default -- see DESIGN.md for the full story
+# before re-attempting this.
 
 _ENTRA_SCOPE = "https://ai.azure.com/.default"
 _FALSY_ENV_VALUES = {"", "0", "false", "no", "off"}

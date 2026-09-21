@@ -69,7 +69,7 @@ python scripts/validate_fixtures.py --seed-placeholders-from-expected
 This only proves the harness's wiring is correct end-to-end — that a real
 `--live` run is still the only thing that tests whether the model's actual
 judgment matches `EXPECTED.md`, not just that the harness can compute and
-compare a hash correctly. `DESIGN.md`'s five "real `--live` run" write-ups
+compare a hash correctly. `DESIGN.md`'s six "real `--live` run" write-ups
 (search for "First real `--live` run" onward) are a detailed record of what
 happens when the two diverge: several rounds where a live model's response
 disagreed with `EXPECTED.md`, and, for a few of those, it turned out the

@@ -3,6 +3,294 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.3] — 2026-09-21
+
+GitHub Actions ran `cli-ci.yml` on the pushed 0.10.0–0.10.2 batch across
+Python 3.10/3.11/3.12 and reported 3 failures, all real (not flaky, not
+environment-specific -- reproduced locally too).
+
+### Fixed
+
+- **`default_rules/agents/security-review.md` had drifted from
+  `.claude/agents/security-review.md`.** The root file had picked up an
+  "Always include" / "Do not include" output-formatting block (an
+  independent edit to that agent's prompt, not part of this session's own
+  changes) that was never mirrored into the CLI's bundled snapshot --
+  exactly the silent-drift failure mode `test_default_rules_sync.py`
+  exists to catch, and it caught it. Fixed by copying the root file over
+  the bundled one, per that test's own instruction.
+- **`test_requirements_sync.py`'s comparison was too strict and broke on
+  a legitimate practice.** The actual committed `requirements.txt` /
+  `requirements-dev.txt` pin exact versions (`anthropic==1.4.0`,
+  `pytest==9.1.1`, etc.) rather than repeating `pyproject.toml`'s own
+  looser `>=` bounds verbatim -- a normal, reasonable pattern (a
+  requirements file as a reproducible-install lockfile, distinct from
+  the installable package's own compatible-range dependencies) that this
+  test's first draft never accounted for, having been written and
+  verified against a version of these files that happened to still use
+  loose bounds. Rewrote the comparison to check what actually matters:
+  the same package names appear in both files, environment markers
+  match, and any version constraint in the requirements file is
+  compatible with `pyproject.toml`'s (an exact pin must satisfy
+  `pyproject.toml`'s specifier, checked with the `packaging` library --
+  already a guaranteed transitive dependency of `pytest`, so no new
+  dependency was added). Still catches the original bug this test was
+  built for -- a forgotten addition or removal shows up as a package-name
+  mismatch -- without breaking every time a lockfile gets re-pinned to a
+  newer patch release.
+
+### Known follow-up this fix causes (not yet done -- needs real Foundry credentials this session doesn't have)
+
+Syncing `security-review.md`'s bundled copy changes that agent's system
+prompt hash, which invalidates every cassette entry recorded against the
+old prompt -- by design (see `tests/fixtures/README.md` and this
+project's whole cassette-testing philosophy: a stale recording must never
+silently satisfy a changed prompt). Confirmed directly, not assumed:
+`python scripts/validate_fixtures.py --agent security-review` now reports
+all 3 cases (`true_positive`, `false_positive_trap`, `boundary_case`) as
+cassette misses against `tests/fixtures/cassettes.json`, and
+`cli/tests/test_cli_integration_live.py`'s two tests fail the same way
+against `cli/tests/cassettes/integration.json` (its `handlers.py` case
+routes to `security-review` + `performance-review`). Both need a real
+`--live` re-record before `.github/workflows/validate-agents.yml` and
+`cli-ci.yml` are fully green again:
+
+```bash
+python scripts/validate_fixtures.py --live
+AGENT_REVIEW_RECORD_LIVE=1 pytest cli/tests/test_cli_integration_live.py
+```
+
+then commit both refreshed cassette files. This can't be done from this
+session (no real `ANTHROPIC_FOUNDRY_*` credentials here) -- it needs to
+happen on a machine with real Foundry access, per this project's
+established process for exactly this situation.
+
+## [0.10.2] — 2026-09-21
+
+### Changed
+
+- **Refactored `cli._print_review()`** to bring its Cognitive Complexity
+  (SonarQube/SonarLint) down from 20 to the project's allowed 15 -- pure
+  refactor, no behavior change. The function was seven independent
+  "if there's something to report, print a header, loop over it" blocks
+  in a row; each `if x: ... for ... in x: ...` pairing nests a loop
+  inside a branch, which Cognitive Complexity penalizes hardest (a nested
+  loop costs its base score plus one per enclosing branch/loop), even
+  though the seven blocks never interact. Split each block into its own
+  helper (`_print_failed_files`, `_print_missing_agents`,
+  `_print_malformed_agents`, `_print_truncated_files`,
+  `_print_skipped_for_budget`, `_print_suppressed`, `_print_findings`)
+  using a guard-clause early return (`if not x: return`) instead of a
+  positive `if x:` wrapping the rest of the body -- that turns "loop
+  nested inside a branch" into "loop at the same level as a guard
+  clause," collapsing each helper to a complexity of 2 and
+  `_print_review` itself to 0 (a plain sequence of calls, no branching of
+  its own left). Verified two ways: the existing capsys-based CLI
+  integration tests (which assert on `_print_review`'s exact stdout)
+  pass unchanged, confirming byte-for-byte identical output; and the
+  `cognitive_complexity` package's `get_cognitive_complexity()` was run
+  directly against both the original AST (reproduced the reported score
+  of 20 exactly, confirming the tool models the same metric SonarQube
+  reported) and the refactored one (0 / 2 across the board) -- not just
+  eyeballing the shape of the fix and assuming it worked.
+
+## [0.10.1] — 2026-09-21
+
+0.10.0 itself introduced a small instance of the exact class of drift
+this project has repeatedly had to catch elsewhere (bundled prompt
+copies, stale doc claims): adding `jsonschema` to
+`[project.optional-dependencies].dev` in `pyproject.toml` (for the new
+SARIF schema-validation test) without also adding it to
+`requirements-dev.txt`, which both files' own header comments say to
+keep in sync with `pyproject.toml` -- and nothing was actually enforcing
+that. Caught while responding to a direct request to reconcile the two
+files, not through any automated check that already existed.
+
+### Fixed
+
+- `requirements-dev.txt` was missing `jsonschema>=4.0` (present in
+  `pyproject.toml`'s `dev` extra since 0.10.0). Added, with the same
+  explanatory comment as the `pyproject.toml` copy.
+- `requirements.txt` was already correct — no change needed there.
+
+### Added
+
+- **`test_requirements_sync.py`**, so this can't silently drift again.
+  Parses `pyproject.toml` (via `tomllib` on 3.11+, the `tomli` backport
+  on 3.10 -- a new conditional dev dependency,
+  `tomli>=2.0; python_version < "3.11"`) and asserts `requirements.txt`'s
+  and `requirements-dev.txt`'s active (non-comment) lines are exactly the
+  set of strings in `[project.dependencies]` and
+  `[project.optional-dependencies].dev` respectively. This is the same
+  fix shape `test_default_rules_sync.py` already applies to prompt
+  content drifting out of sync with its bundled copy: replace a comment
+  asking a future contributor to remember with a test that fails loudly
+  the moment they forget. Verified the test actually catches drift (not
+  just passes vacuously) by deliberately deleting the `jsonschema` line
+  from `requirements-dev.txt` and confirming the test fails with a clear
+  diff, then restoring it — and verified the `tomli` fallback path for
+  real, not just by code inspection, by installing this package under an
+  actual Python 3.10 interpreter and running the full suite there (176
+  passed; 4 unrelated pre-existing failures in that one interpreter's
+  `test_agents_client.py` Entra ID tests trace to a missing
+  `_cffi_backend` native module for that specific ad-hoc install, not to
+  anything this change touches).
+
+## [0.10.0] — 2026-09-21
+
+With 0.9.16's flakiness-reduction path confirmed a dead end at the API
+level (no code-level lever exists for it in the installed SDK), building
+on top of the current, already-disciplined prompt/evidence-bar baseline
+was the agreed next step rather than waiting on a fix that isn't coming.
+This is that feature: SARIF output, so a CI pipeline gets inline PR
+annotations and a persistent alerts list (GitHub code scanning, Azure
+DevOps, and most CI security dashboards all consume SARIF) instead of
+only a build-log-only report.
+
+### Added
+
+- **`--sarif` flag** (`review` subcommand), mutually exclusive with
+  `--json`. Renders the same `ReviewRun` as a SARIF 2.1.0 log via the new
+  `sarif.py` module — a peer to the existing `_review_run_to_dict()`
+  (`--json`)'s rendering, not a replacement for it: same input, different
+  consumer-facing shape. Each specialist agent becomes a SARIF rule
+  (`security-review`, `data-integrity-review`, etc., with a
+  `shortDescription` kept in sync with the README's agent-roster table by
+  hand); each finding becomes a result with `level` derived from severity
+  (`CRITICAL`/`HIGH` → `error`, `MEDIUM` → `warning`, `LOW` → `note`,
+  with the original four-way severity preserved unchanged in
+  `properties.severity` since SARIF's four levels can't otherwise tell
+  CRITICAL and HIGH apart); and `location`'s `file:line` is split into a
+  SARIF `physicalLocation` (a location with no `:line` suffix — e.g. a
+  documentation-only finding — degrades to an artifact-only location with
+  no `region`, rather than crashing on a shape that isn't supposed to
+  occur but is defensively handled anyway).
+- **Stable finding fingerprints.** Each result carries a
+  `partialFingerprints.agentReview/v1` hash of `agent:path:title`
+  (deliberately excluding the model's free-form impact/fix prose,
+  which can be worded slightly differently between runs for the same
+  underlying issue) — this is what lets GitHub code scanning and similar
+  SARIF consumers recognize a finding as already-seen across runs even
+  after an unrelated earlier edit shifts its line number, instead of
+  re-flagging it as new every time.
+- **Non-finding signals travel too.** Everything `_print_review()` /
+  `--json` already surface outside the findings list — a failed file, a
+  specialist skipped for a missing/malformed prompt response, a
+  truncated diff, a file dropped by `--max-files`, a suppressed finding —
+  is rendered as a SARIF `toolExecutionNotification` (`error` for a
+  failed file, which also flips `invocations[0].executionSuccessful` to
+  `false`; `warning` for missing/malformed agents; `note` for the rest),
+  so a SARIF-only consumer that never sees this tool's stdout doesn't
+  silently lose visibility into any of it.
+- New dev-only dependency: `jsonschema` (only imported by
+  `test_sarif_schema_validation.py`, via `pytest.importorskip` so its
+  absence skips one test rather than failing collection). Backs a new
+  test that validates a generated SARIF log against the real, official
+  SARIF 2.1.0 schema — bundled locally at
+  `cli/tests/support/sarif-schema-2.1.0.json` (same record/replay
+  reasoning as `tests/support/cassette.py` one directory over: this must
+  stay a deterministic, network-free check on every PR, not a live fetch
+  that can flake or silently start validating against a moved/absent
+  URL).
+
+### Fixed (caught before shipping, not after, this time)
+
+- The SARIF schema URL this feature's own code originally hardcoded
+  (`.../sarif-spec/master/Schemata/sarif-schema-2.1.0.json`, the path
+  most third-party examples use) 404s — OASIS moved the file under
+  `sarif-2.1/schema/` at some point after that path was first written up
+  elsewhere. Caught by the same discipline 0.9.16's postmortem named as
+  the fix going forward: actually validate against the real thing before
+  shipping, not just write code that looks right. A hand-built SARIF log
+  covering every rendering branch (multiple severities, a
+  no-line-number finding, a failed file, missing/malformed agents, a
+  truncated file, a budget-skipped file, a suppressed finding, and a
+  cache-replayed finding) was run through `jsonschema.validate()` against
+  the corrected URL's schema before this shipped, and that check is now
+  a permanent, offline regression test rather than a one-time manual
+  step.
+
+## [0.9.16] — 2026-09-21
+
+Reverted 0.9.15 within the hour: the very first `--live` run after it
+shipped crashed every single case with
+`TypeError: Messages.create() got an unexpected keyword argument
+'temperature'`. The fix's whole premise — pin `temperature` to cut
+sampling variance — was never checked against the actually-installed
+`anthropic` SDK before shipping. It should have been.
+
+### Fixed
+
+- Confirmed directly (`inspect.signature()` on the installed SDK's
+  `Messages.create`, then grepping the entire installed `anthropic`
+  package for the string `"temperature"` and finding zero references
+  anywhere) that this API generation has no `temperature`, `top_p`, or
+  `top_k` parameter at all — not a version mismatch on this project's
+  side, a genuine capability absent from the SDK/API surface that serves
+  `claude-sonnet-5`-generation models. The closest thing,
+  `output_config={"effort": ...}` (`low`/`medium`/`high`/`xhigh`/`max`),
+  is a reasoning-effort dial, not a sampling-determinism control, and
+  isn't a substitute. Removed `TEMPERATURE` and the `temperature=` kwarg
+  entirely rather than trying a different value or parameter name — there
+  is currently no lever in this codebase for the thing 0.9.15 was trying
+  to control, and pretending otherwise with a differently-named guess
+  would repeat the same mistake once more.
+
+### Lesson
+
+0.9.15 was reasoned from the project's own documented flakiness history
+and from reading the calling code — genuinely well-motivated — but never
+executed against a real call before being presented as a fix, which is
+exactly the verification step this project's own established discipline
+(going back to the sixth `--live` run's CRLF correction) exists to catch.
+A one-line smoke test — construct the real client, or even just
+`inspect.signature()` the method being called — would have caught this
+before it shipped instead of after. The flakiness problem this was meant
+to address is still real and still open; there's currently no known fix
+for it beyond continuing the prompt/evidence-bar discipline already in
+use throughout this project's `--live` tuning history.
+
+## [0.9.15] — 2026-09-21
+
+Pinned `temperature=0.0` on every live Foundry call
+(`agents_client.py`'s `AnthropicFoundryReviewer.complete()`), which had
+never set it at all — every review call ran at the API's default
+(full-sampling) temperature. This is a code fix, not a prompt fix, made
+after reviewing this project's own multi-round `--live` tuning history:
+several of the hardest-to-diagnose "is this a real prompt gap or just
+noise" investigations (the four distinct reframings of
+`testing-coverage-review/false_positive_trap`, `data-integrity-review/
+true_positive`'s n=2 miss against an unchanged prompt) are exactly the
+symptom an unpinned temperature produces — the same request producing a
+different verdict, or a different *framing* of the same verdict, across
+otherwise-identical calls. This doesn't replace the evidence-bar/prompt
+discipline used throughout this project, but it should lower how often
+that discipline is needed for pure sampling noise rather than a real gap.
+
+### Changed
+
+- `agents_client.py`: added a `TEMPERATURE = 0.0` module constant
+  (alongside the existing `MAX_TOKENS`) and passed it to every
+  `messages.create()` call. Not exposed as a CLI flag or env var — there's
+  no legitimate reason a code-review verdict should want more sampling
+  variety, so this isn't a setting a user could accidentally loosen.
+
+### Important caveat for what happens next
+
+`request_key()` hashes only `system_prompt + user_message` — it has no
+way to know a non-prompt parameter like temperature changed, so every
+existing cassette entry in `tests/fixtures/cassettes.json` and
+`cli/tests/cassettes/integration.json` still matches its cache key and
+will keep replaying as "valid" even though it was recorded at the old,
+unpinned temperature. Unlike a prompt edit, this change does NOT force a
+re-recording automatically. A full fresh `--live` run (ideally two or
+three consecutive full runs, not just one) is required to actually
+generate temperature=0 data and see whether it measurably reduces the
+run-to-run flakiness this session spent so much effort diagnosing —
+watch specifically whether `data-integrity-review/true_positive` and
+`testing-coverage-review/false_positive_trap`, the two cases with the
+most flip-flopping history, now hold steady across repeated runs.
+
 ## [0.9.14] — 2026-09-18
 
 `data-integrity-review --live` came back 4/4 clean, confirming 0.9.13's
@@ -31,6 +319,17 @@ which is the one place that actually wants real credentials loaded.
   (`_load_dotenv_if_present` itself never overrides a real environment
   variable) — it just means a working `cli/.env` is enough on its own,
   the same as it already is for `scripts/validate_fixtures.py --live`.
+  **Confirmed live** — `cli/tests/cassettes/integration.json` was
+  re-recorded for real against the current bundled prompts (both tests
+  pass, `_meta`'s placeholder note is cleared, and a spot-check for the
+  known "wrapped in a markdown code fence" failure mode found none in the
+  currently-matched entries — only in older, no-longer-reachable hash keys
+  left over from a previous round, harmless dead weight rather than a live
+  bug). This closes out the entire 0.9.10 → 0.9.14 arc — the bundled
+  defaults sync, the discriminating-power Evidence Bar lift, the three
+  exclusion trims/cross-references, the billing.py/handlers.py
+  canonicalization, the narrowing-vs-brand-new-table fix, and this
+  dotenv fix — as one fully live-verified state.
 
 ## [0.9.13] — 2026-09-18
 

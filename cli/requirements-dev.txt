@@ -19,4 +19,13 @@ azure-identity==1.25.3
 # PyYAML (see requirements.txt) ships no inline type hints -- without its
 # stub package mypy reports "Library stubs not installed for 'yaml'" on
 # suppressions.py.
-types-PyYAML==6.0.12
+types-PyYAML==6.0.12.20260906
+# Only used by test_sarif_schema_validation.py, to validate a generated
+# SARIF log against the real, bundled SARIF 2.1.0 schema -- that test
+# uses pytest.importorskip("jsonschema") so a dev environment missing
+# this one package skips that single test instead of failing collection.
+jsonschema==4.2.6
+# Only used by test_requirements_sync.py, to parse pyproject.toml and
+# confirm this file actually mirrors it. tomllib is stdlib from 3.11 on;
+# this backport covers this project's 3.10 floor.
+tomli>=2.0; python_version < "3.11"

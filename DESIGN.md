@@ -442,9 +442,12 @@ def compute_discount(order):
         return order.total * 0.20
     return order.total * 0.05
 
+
 # test_discounts.py (same diff)
 def test_vip_discount_over_500():
     assert compute_discount(make_order(vip=True, total=600)) == 120
+
+
 def test_non_vip_discount():
     assert compute_discount(make_order(vip=False, total=600)) == 30
 ```
@@ -687,8 +690,10 @@ cli/src/agent_review/agents_client.py   # Reviewer protocol + real AnthropicFoun
 cli/src/agent_review/commit.py          # staged-diff commit message generator (no co-author trailer)
 cli/src/agent_review/healing.py         # guarded self-healing: propose a patch, apply only if --apply
 cli/src/agent_review/init.py            # agent-init: scaffolds .agent-rules/, .agent-cache/, DESIGN.md
+cli/src/agent_review/sarif.py           # ReviewRun -> SARIF 2.1.0 log, the --sarif flag's renderer
 cli/src/agent_review/default_rules/     # bundled snapshot of CLAUDE.md + the 7 specialist prompts
-cli/tests/                              # 157 pytest tests, including full CLI-entry-point integration tests
+cli/tests/support/sarif-schema-2.1.0.json  # bundled official schema, for offline SARIF validation
+cli/tests/                              # 180 pytest tests, including full CLI-entry-point integration tests
 ```
 
 ### Local caching (requirement 1: cache isolation + incremental analysis)
@@ -1769,6 +1774,110 @@ working `cli/.env` is now enough on its own for recording, matching how
 exercised against a real Foundry call in this exact form — the natural
 next step.
 
+**Confirmed (2026-09-18, discovered on a 2026-09-21 cache refresh).** The
+recording succeeded — `cli/tests/cassettes/integration.json`'s mtime and
+cleared `_meta` show a real live run happened shortly after the fix
+above, and replaying it locally passes both tests. This closes the entire
+0.9.10 → 0.9.14 arc as one fully confirmed state: the bundled defaults
+sync, the discriminating-power Evidence Bar lift, the three exclusion
+trims/cross-references, the billing.py/handlers.py canonicalization, the
+narrowing-vs-brand-new-table fix, this dotenv fix, and the integration
+cassette recording. Worth noting as its own lesson: this confirmation
+almost got lost — the live run happened but was never reported back in
+the conversation that requested it, and would have stayed unverified
+indefinitely without a deliberate "refresh and check mtimes against what
+was last discussed" pass before answering an unrelated question. A result
+sitting on disk is not the same as a result someone has actually looked
+at.
+
+### Pinning temperature (2026-09-21)
+
+Asked what to build next -- a new feature or a fix -- and answered it by
+first checking `agents_client.py`'s actual `messages.create()` call rather
+than reasoning about the codebase from memory. It never set `temperature`
+at all, meaning every live review call all six-plus tuning rounds ran at
+Foundry's API default (full sampling). That's a genuinely different
+category of finding than the format/wiring gaps this project usually
+surfaces: not a missing feature and not a wrong prompt, but an unpinned
+sampling parameter quietly inflating the noise floor underneath every
+single one of those rounds.
+
+The evidence for treating this as worth fixing before anything else,
+specifically, rather than a generic "more determinism is nice" instinct:
+this session alone produced two of the hardest diagnostic investigations
+in the project's history --  `testing-coverage-review/false_positive_trap`
+finding a fourth distinct reframing after three rounds had each
+successfully closed the previous one, and `data-integrity-review/
+true_positive` missing twice in a row against a prompt that had zero
+failure history across six earlier rounds and a documented model bias
+running the *opposite* direction on that exact fixture shape. Both
+investigations were expensive specifically because they required
+distinguishing "real prompt gap" from "this one sample happened to land
+differently" -- the exact ambiguity an unpinned temperature manufactures
+by design. Pinning it doesn't retroactively explain either investigation
+away (both had concrete, independently-verified prompt-text fixes that
+address a real mechanism, not just a re-roll), but it should reduce how
+often this exact ambiguity has to be fought through by hand going
+forward.
+
+**The fix.** Added `TEMPERATURE = 0.0` next to the existing `MAX_TOKENS`
+constant and passed it into every `messages.create()` call. Deliberately
+not exposed as a CLI flag or environment variable, unlike `--model`: there
+is no legitimate use case where a code-review verdict against a fixed
+evidence bar should want more creative variety, so this isn't a knob a
+user could accidentally loosen.
+
+**A real limitation this surfaced in the caching design itself.**
+`request_key()` — the whole mechanism this project relies on to know when
+a cassette entry is stale — hashes only `system_prompt + user_message`.
+It has no way to represent "the sampling parameters changed," so this
+temperature fix is invisible to it: every existing cassette entry still
+matches its key and will keep replaying as valid, even though it no
+longer reflects what a live call would actually return. A prompt-text
+edit forces a re-recording automatically, by construction; a
+generation-parameter edit does not, and nothing in this project currently
+detects that gap. This isn't fixed here — it's flagged as a real, if
+narrow, blind spot in the cache-invalidation design for whoever next
+changes a non-prompt generation parameter (top_p, a different
+`max_tokens`, etc.) to know they must re-record by hand, since the
+tooling won't tell them to.
+
+**Verification status: failed, and reverted within the hour.** The very
+first `--live` run after this shipped crashed on the first case:
+`TypeError: Messages.create() got an unexpected keyword argument
+'temperature'`. The installed `anthropic` SDK's `Messages.create()`
+genuinely has no `temperature` parameter -- confirmed directly with
+`inspect.signature()`, then by grepping the entire installed package for
+the string `"temperature"` and finding it nowhere at all, not in this
+method, not anywhere in the SDK. This isn't a version pin issue this
+project got wrong; it's a real absence in the API surface serving
+`claude-sonnet-5`-generation models. `top_p` and `top_k` are equally
+absent. The closest available parameter, `output_config.effort`
+(`low`/`medium`/`high`/`xhigh`/`max`), controls reasoning effort, not
+sampling variance, and using it as a substitute would have been guessing
+again rather than fixing anything. Removed `TEMPERATURE` and the
+`temperature=` kwarg entirely.
+
+**The actual lesson.** The reasoning that led here -- reading the calling
+code, finding no temperature pin, connecting it to this project's own
+documented flakiness history -- was sound and worth doing. What was
+missing was the one cheap step that would have caught the mistake before
+it shipped: actually calling (or even just introspecting) the real client
+this code runs against, rather than assuming a parameter name that is
+completely standard across most LLM APIs would also exist on this one.
+This is the same category of error this project corrected once already,
+in the sixth `--live` run's CRLF theory -- a plausible-sounding mechanism
+shipped as a fix before being checked against the real thing it was
+supposed to explain. The fix there was "verify a theory against real
+behavior before writing it up as confirmed"; the fix here is the same
+principle one step earlier -- verify a fix is even *possible* against the
+real interface before writing the code, not just before trusting the
+result. The underlying flakiness problem this was meant to address is
+still real and still fully open. There is currently no known API-level
+lever for it in this SDK; the only tools available remain the
+prompt/evidence-bar discipline this project has used in every `--live`
+round so far.
+
 ### Structured output, budget management, and the feedback loop (implemented in 0.9.0)
 
 Three further production-readiness gaps were identified alongside the CI
@@ -1905,3 +2014,115 @@ frontmatter reader `prompts.py` uses elsewhere, because that reader only
 ever parses a fixed, tool-generated set of flat scalar fields — an
 ordinary hand-authored YAML file with lists, quoting, and comments is
 exactly the case a real parser earns its keep for.
+
+### SARIF output (implemented in 0.10.0)
+
+**Why this, and why now.** 0.9.16's postmortem left the flakiness-
+reduction goal at a genuine dead end: the installed `anthropic` SDK has
+no `temperature`/`top_p`/`top_k` parameter at all, verified directly
+(`inspect.signature()` plus a full-package grep), so there is currently
+no API-level lever for it. Rather than block the next feature on a fix
+that doesn't exist, the agreed path was to build on the current baseline
+as-is — it already carries six real `--live` rounds' worth of
+evidence-bar tuning (Section E, and the "real `--live` run" write-ups
+above), which is a reasonable foundation even without a
+sampling-variance dial. SARIF was the standing candidate for "next
+feature" going back to the "which new feature should I add" review two
+turns earlier in this project's own history: it's the format GitHub code
+scanning, Azure DevOps, and most CI security dashboards expect from a
+static analysis tool, and this project's own `.github/workflows/` already
+runs `agent-review` in CI conceptually (via `cli-ci.yml`'s test suite) —
+producing SARIF is what would let a target repo's own CI upload this
+tool's findings as inline PR annotations and a persistent, deduplicated
+alerts list, instead of only a build-log-only report a human has to go
+looking for.
+
+**Design.** A new `sarif.py` module, deliberately a peer to
+`cli._review_run_to_dict()` (the existing `--json` renderer) rather than
+a replacement for it or a change to either: both take the same
+`ReviewRun` and produce a different consumer-facing shape, and a new
+`--sarif` flag (mutually exclusive with `--json` via an
+`argparse` mutually-exclusive group — a run can only have one
+machine-readable output shape at a time) picks between them in
+`cmd_review`. Three design decisions worth recording:
+
+1. **Each specialist agent is a SARIF rule**, not each distinct finding
+   title. SARIF's rule concept is meant for a stable, small, enumerable
+   set of things a tool can report — this project's 8-agent roster is
+   exactly that, and it's also what already exists in `Finding.agent`
+   with no new bookkeeping required. `_RULE_DESCRIPTIONS` mirrors the
+   README's "Agent roster" table by hand, not via an automated
+   cross-check like `test_default_rules_sync.py` uses for prompt content
+   — worth reconsidering if this table drifts in practice, but a stale
+   SARIF description costs nothing but cosmetics, unlike a stale prompt
+   body, which is why prompt sync gets the expensive automated guarantee
+   and this doesn't.
+2. **Severity maps to SARIF's four levels lossily, on purpose, with the
+   original preserved alongside it.** SARIF only has
+   `error`/`warning`/`note`/`none`, one fewer than this project's own
+   four-tier `CRITICAL`/`HIGH`/`MEDIUM`/`LOW`. Collapsing CRITICAL and
+   HIGH into `error` was the only reasonable choice (a SARIF consumer's
+   PR-blocking behavior is typically keyed off `error`, and this
+   project's own `--fail-on-findings` already treats CRITICAL and HIGH
+   as the same "blocking" tier — see `cmd_review`), but the distinction
+   isn't thrown away: every result's `properties.severity` carries the
+   original four-way value for any consumer that wants it back.
+3. **A stable fingerprint, deliberately excluding free-form prose.**
+   `partialFingerprints.agentReview/v1` hashes `agent:path:title` only —
+   not `impact`/`fix`, which are the model's own free-form wording and
+   can legitimately differ slightly between two runs describing the same
+   underlying issue. Including them would defeat the fingerprint's whole
+   purpose (letting a SARIF consumer recognize "this is the same finding
+   as last run" across an unrelated edit that shifts the line number)
+   by making two runs of the identical issue hash differently over
+   nothing but phrasing.
+
+Non-finding signals — a failed file, a specialist skipped for a
+missing/malformed response, a truncated diff, a file dropped by
+`--max-files`, a suppressed finding — already have a home in
+`_print_review()` and `_review_run_to_dict()`; SARIF's equivalent is
+`invocations[].toolExecutionNotifications`, and `to_sarif()` populates it
+with the same information (a failed file is `error`-level and also flips
+`executionSuccessful` to `false`; missing/malformed agents are
+`warning`; everything else is `note`) so a SARIF-only consumer — one that
+never sees this tool's stdout at all, which is the normal case for a CI
+upload step — doesn't silently lose visibility into any of it.
+
+**A schema-URL bug caught before shipping, not after.** The first draft
+of this module hardcoded
+`.../sarif-spec/master/Schemata/sarif-schema-2.1.0.json` as the `$schema`
+URL — the path used by most third-party SARIF examples found while
+building this. Before calling this feature done, the exact discipline
+0.9.16's postmortem named as the fix going forward was applied here: a
+hand-built SARIF log covering every rendering branch (multiple
+severities, a no-line-number finding, a failed file, missing/malformed
+agents, a truncated file, a budget-skipped file, a suppressed finding,
+and a cache-replayed finding) was validated with
+`jsonschema.validate()` against that URL's content — and it 404'd. OASIS
+had moved the file to `sarif-2.1/schema/` at some point after the
+originally-assumed path was first written up elsewhere. The corrected
+URL validated cleanly. This is now `test_sarif_schema_validation.py`, a
+permanent regression test, not a one-time manual check that could
+silently stop being true the next time SARIF ships a point release —
+against a schema bundled locally at
+`cli/tests/support/sarif-schema-2.1.0.json` (same reasoning as
+`tests/support/cassette.py`'s record/replay design: this must stay a
+deterministic, network-free check on every PR, never a live fetch that
+can flake on a GitHub outage or, as just demonstrated, a moved URL).
+`jsonschema` is a new dev-only dependency, imported via
+`pytest.importorskip` so its absence skips that one test rather than
+failing collection for the whole suite.
+
+**Known limitation, inherited rather than introduced.** A finding
+replayed from `.agent-cache/` has `Finding.agent == "cached"` — the
+cache stores combined text per file, not attributed per specialist (see
+`cache.py`), so the specialist that originally produced a cached finding
+isn't preserved. Such findings render under a `cached` SARIF rule
+(with a `shortDescription` that says exactly this) rather than under the
+real specialist. This is not new: `--json` output already has the same
+`"agent": "cached"` string in every cached finding today. Actually fixing
+it would mean caching per-agent raw text instead of one combined blob
+per file — a real, separable change to `cache.py` and
+`orchestrator._review_one_file()`, out of scope for a rendering-layer
+feature, and now written down here rather than silently absorbed into
+SARIF's blast radius.

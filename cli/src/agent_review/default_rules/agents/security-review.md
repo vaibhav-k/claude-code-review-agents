@@ -104,3 +104,12 @@ do not trace the entire call graph.
 
 Use the global output contract exactly. Report nothing outside your scope
 above, even if you notice it.
+
+Always include:
+- The untrusted input source.
+- The sink it reaches.
+- The specific control that is absent or removed that would have neutralized the issue.
+
+Do not include:
+- Speculative or hypothetical security issues without concrete evidence.
+- Internal implementation details unrelated to the security impact.

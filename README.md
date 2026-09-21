@@ -1,5 +1,7 @@
 # claude-code-review-agents
 
+**Repository:** [github.com/vaibhav-k/claude-code-review-agents](https://github.com/vaibhav-k/claude-code-review-agents)
+
 A production-grade, inference-efficient Claude Code subagent system for
 automated diff review. It caps out at **8 total agents** — one triage
 router plus seven razor-scoped defect-class specialists (security, data
@@ -157,12 +159,16 @@ structured-output guards that detect and warn about a specialist response
 that doesn't match the expected finding format instead of silently
 treating it as "no finding"; and an optional `.claude/ignore-findings.yml`
 so a team can mark an accepted false positive as suppressed (logged, not
-silently dropped) without editing the agent's prompt. See
-[`cli/README.md`](cli/README.md) for full usage, and `DESIGN.md` Section G
-for the architecture — including "Honest limitations," which now also
-covers what a real end-to-end run against a live Foundry resource
-surfaced (and how it was fixed) beyond what the automated test suite alone
-could catch.
+silently dropped) without editing the agent's prompt. Findings can be
+printed as human-readable text (the default), `--json` for programmatic
+consumption, or `--sarif` for a SARIF 2.1.0 log — the format GitHub code
+scanning, Azure DevOps, and most CI security dashboards expect, for
+inline PR annotations and a persistent, deduplicated alerts list instead
+of a build-log-only report. See [`cli/README.md`](cli/README.md) for full
+usage, and `DESIGN.md` Section G for the architecture — including "Honest
+limitations," which now also covers what a real end-to-end run against a
+live Foundry resource surfaced (and how it was fixed) beyond what the
+automated test suite alone could catch.
 
 ## Development
 
@@ -208,8 +214,8 @@ pytest suite (see that file's own comment for why).
   Code version supports additional fields, that's fine — nothing here
   depends on more than this subset.
 - The validation matrix in `DESIGN.md` Section E has, at this point, been
-  run against a real Foundry-hosted model five separate times (see
-  `CHANGELOG.md` 0.9.1 through 0.9.7 and DESIGN.md's five "real `--live`
+  run against a real Foundry-hosted model six separate times (see
+  `CHANGELOG.md` 0.9.1 through 0.9.9 and DESIGN.md's six "real `--live`
   run" write-ups), each round fixing whatever the previous round's real
   model responses actually got wrong — not just the two placeholder-vs-
   wiring checks CI runs on every PR. That history is worth reading before
@@ -228,16 +234,21 @@ pytest suite (see that file's own comment for why).
 - `cli/`'s automated suite mostly tests orchestration logic (routing,
   caching, git diffing) against a fake, in-memory model client, not a
   live one. `cli/tests/test_cli_integration_live.py` narrows this with a
-  cassette-backed run of the real orchestrator, but — unlike the
-  `tests/fixtures/` validation matrix above — its committed cassette
-  (`cli/tests/cassettes/integration.json`) is still hand-authored
-  placeholder data, not yet recorded against a real Foundry call; that's
-  a separate, still-open gap from the fixture matrix's live-run history.
-  The CLI itself has, independently, been run for real by an actual user
-  against a real Microsoft Foundry resource and real repositories many
-  times over (that's what produced the five-round fixture history above)
-  — see `DESIGN.md` Section G's "Honest limitations" for the first such
-  run.
+  cassette-backed run of the real orchestrator; its committed cassette
+  (`cli/tests/cassettes/integration.json`) has been recorded for real
+  against a live Foundry call (2026-09-18, `AGENT_REVIEW_RECORD_LIVE=1`)
+  and both tests pass against it — this is no longer an open gap. Rerun
+  the recording whenever `agents_client.py`, `routing.py`,
+  `orchestrator.py`, or the bundled `default_rules/` prompts change in a
+  way that could plausibly change what a real model call returns; a
+  prompt-only PR that forgets to also touch `default_rules/` is now
+  caught automatically by `cli/tests/test_default_rules_sync.py` in CI,
+  but a stale *cassette* against an otherwise-in-sync prompt still needs a
+  human to notice and re-record. The CLI itself has, independently, been
+  run for real by an actual user against a real Microsoft Foundry
+  resource and real repositories many times over (that's what produced
+  the six-round fixture history above) — see `DESIGN.md` Section G's
+  "Honest limitations" for the first such run.
 
 ## Contributing
 
