@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from agent_review import fingerprint
 from agent_review.cache import AgentCache
 from agent_review.orchestrator import (
     MAX_DIFF_LINES,
@@ -120,6 +121,44 @@ def test_second_run_with_no_changes_is_a_pure_cache_hit(tmp_path):
     assert run2.cache_misses == 0
     assert len(run2.all_findings) == 1
     assert run2.all_findings[0].severity == "CRITICAL"
+
+
+def test_cache_hit_preserves_agent_and_rule_id_from_the_original_live_call(tmp_path):
+    # The bug this guards: cache schema version 1 merged every agent's
+    # text into one string, so a cache-hit replay had to fall back to a
+    # placeholder "cached" agent name -- which, once rule_id existed,
+    # gave the SAME finding a DIFFERENT rule_id (and therefore a
+    # DIFFERENT fingerprint) on a cache hit than it got on the live call
+    # that originally cached it. See cache.py's module docstring.
+    repo = make_repo(tmp_path)
+    (repo / "handlers.py").write_text(
+        "def get_user(request):\n"
+        '    user_id = request.args.get("id")\n'
+        '    query = f"SELECT * FROM users WHERE id = {user_id}"\n'
+        "    return db.execute(query).fetchone()\n"
+    )
+    prompts = load_agent_prompts(repo)
+    reviewer = FakeReviewer(
+        {
+            "security vulnerabilities": (
+                "[CRITICAL] handlers.py:3 — SQL injection\nImpact: x\nFix: y\n"
+            ),
+        }
+    )
+
+    cache1 = AgentCache(repo)
+    run1 = run_review(repo, None, prompts, cache1, reviewer)
+    live_finding = run1.all_findings[0]
+    assert live_finding.agent == "security-review"
+    assert live_finding.rule_id == "SEC-INJECTION-001"
+
+    cache2 = AgentCache(repo)
+    run2 = run_review(repo, None, prompts, cache2, reviewer)
+    assert run2.cache_hits == 1
+    cached_finding = run2.all_findings[0]
+    assert cached_finding.agent == live_finding.agent
+    assert cached_finding.rule_id == live_finding.rule_id
+    assert fingerprint.compute(cached_finding) == fingerprint.compute(live_finding)
 
 
 def test_unrelated_file_change_does_not_invalidate_other_files_cache(tmp_path):

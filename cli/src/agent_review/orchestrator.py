@@ -1,4 +1,5 @@
-"""Ties together routing, caching, prompts, and the model client into one
+"""
+Ties together routing, caching, prompts, and the model client into one
 run: diff -> route -> (cache hit or model call) -> parse -> aggregate.
 
 This is the direct equivalent of .claude/commands/review-pr.md, reimplemented
@@ -15,6 +16,7 @@ from pathlib import Path
 
 from . import findings as findings_mod
 from . import git_utils, routing
+from . import rules as rules_mod
 from . import suppressions as suppressions_mod
 from .agents_client import Reviewer
 from .cache import CACHE_DIRNAME, AgentCache
@@ -135,7 +137,8 @@ _NO_TOOL_ACCESS_NOTE = (
 
 
 def build_review_user_message(file_label: str, diff_text: str) -> str:
-    """The exact user-message shape sent to a specialist for one review
+    """
+    Builds the exact user-message shape sent to a specialist for one review
     call. `file_label` is the caller's own already-formatted "File: x.py"
     or "Files: a.py, b.py" line (singular vs. plural differs between this
     module's own single-file-per-call convention and
@@ -157,7 +160,8 @@ def build_review_user_message(file_label: str, diff_text: str) -> str:
 
 
 def _truncate_diff(diff_text: str, max_lines: int = MAX_DIFF_LINES) -> tuple[str, bool]:
-    """Cuts `diff_text` to `max_lines` with an explicit marker at the cut
+    """
+    Cuts `diff_text` to `max_lines` with an explicit marker at the cut
     point, so a specialist sees plainly that it's looking at a partial
     diff rather than silently reviewing less than it appears to. Returns
     the (possibly unchanged) text and whether truncation happened.
@@ -184,7 +188,17 @@ def _review_one_file(
 
     cached = cache.get_if_fresh(path, cache_key_hash, agents_for_file)
     if cached is not None:
-        parsed = findings_mod.parse("cached", cached)
+        # `cached` is {agent: raw_text} (cache schema version 2) -- parsed
+        # and rule_id-assigned per agent, exactly like the live path
+        # below, so a finding's agent/rule_id/fingerprint is identical
+        # whether this run hit the cache or called the model. See
+        # cache.py's module docstring for why this matters (it didn't,
+        # before rule_id/fingerprint existed) and rules_mod.attach_rule_ids
+        # for what "exactly like the live path" means here.
+        parsed: list[findings_mod.Finding] = []
+        for agent_name, raw in cached.items():
+            agent_findings = findings_mod.parse(agent_name, raw)
+            parsed.extend(rules_mod.attach_rule_ids(agent_name, diff_text, agent_findings))
         return FileReviewResult(
             path=path,
             agents=agents_for_file,
@@ -217,7 +231,13 @@ def _review_one_file(
                 continue
             raw_by_agent[agent_name] = raw
             completed_agents.append(agent_name)
-            parsed_all.extend(agent_findings)
+            # rule_id assignment happens here, once per (file, agent) call,
+            # from this agent's name plus the SAME diff_text already sent
+            # to the model (structured, deterministic, non-prose signals
+            # only) -- never from agent_findings' own title/impact/fix
+            # text. See rules.py's module docstring for the full rationale
+            # and its documented per-(file, agent) granularity trade-off.
+            parsed_all.extend(rules_mod.attach_rule_ids(agent_name, diff_text, agent_findings))
     except Exception as exc:  # deliberately broad: a single
         # file's model/network failure (a transient Foundry timeout, rate
         # limit, or the enriched connection-error RuntimeError from
@@ -249,8 +269,13 @@ def _review_one_file(
     # `get_if_fresh` naturally misses and retries the full routed set,
     # rather than staying silently stuck.)
     if completed_agents:
-        combined_raw = "\n".join(raw_by_agent[a] for a in completed_agents)
-        cache.put(path, cache_key_hash, completed_agents, combined_raw)
+        # raw_by_agent already holds exactly (and only) the completed
+        # agents' own text, keyed by agent name -- stored as-is (schema
+        # version 2) instead of concatenated into one string, so a later
+        # cache-hit replay can parse and rule_id-assign each agent's
+        # findings under its own real name. See cache.py's module
+        # docstring for why this attribution matters now.
+        cache.put(path, cache_key_hash, raw_by_agent)
 
     return FileReviewResult(
         path=path,
@@ -263,6 +288,137 @@ def _review_one_file(
     )
 
 
+_RoutedFile = tuple[str, list[str], str, bool]  # (path, agents, diff_text, was_truncated)
+
+
+def _route_changed_files(repo_root: Path, resolved_base: str) -> list[_RoutedFile]:
+    """
+    Diffs every changed file exactly once, drops semantic noise, and
+    routes + truncates the rest -- split out of run_review() so that
+    function reads as a flat sequence of phases instead of one large
+    nested loop (each extracted helper here is its own, separately-simple
+    unit, which is what actually brings run_review()'s own Cognitive
+    Complexity down, rather than just moving the same branching around).
+
+    Each changed file's diff is fetched exactly once, here, and threaded
+    through to _review_one_file afterward instead of being fetched again
+    inside it -- a duplicate git subprocess call per file that used to
+    double the git overhead of every run (and a fresh-repo/agent-init
+    scan, which diffs against the empty-tree sentinel and so treats every
+    tracked file as "added," is exactly the case where that overhead
+    scales with the whole repo, not just a PR's file count).
+    """
+    changed = [
+        c
+        for c in git_utils.changed_files(repo_root, resolved_base)
+        if c.status != "D"
+        and not c.path.startswith(_ALWAYS_IGNORED_PREFIXES)
+        and not routing.is_excluded_from_review(c.path)
+    ]
+    routed: list[_RoutedFile] = []
+    for changed_file in changed:
+        diff_text = git_utils.diff_for_file(repo_root, resolved_base, changed_file.path)
+        if routing.is_semantic_noise(diff_text):
+            continue
+        decision = routing.route_file(changed_file.path, diff_text)
+        if decision.agents:
+            diff_text, was_truncated = _truncate_diff(diff_text)
+            routed.append((changed_file.path, decision.agents, diff_text, was_truncated))
+    return routed
+
+
+def _apply_file_budget(
+    routed: list[_RoutedFile], max_files: int | None
+) -> tuple[list[_RoutedFile], list[str]]:
+    """
+    Caps `routed` at `max_files`, prioritized by how many specialists
+    routing.py's own (zero-cost, already-computed) decision matched, as a
+    proxy for how broad a file's risk surface is -- a file that tripped
+    patterns for three specialists is a more informative use of a limited
+    budget than one that tripped a single narrow pattern. Ties broken by
+    path for determinism. Returns `routed` unchanged (and no skips) when
+    there's no budget or it's already under it.
+    """
+    if max_files is None or len(routed) <= max_files:
+        return routed, []
+    prioritized = sorted(routed, key=lambda r: (-len(r[1]), r[0]))
+    skipped_for_budget = [r[0] for r in prioritized[max_files:]]
+    return prioritized[:max_files], skipped_for_budget
+
+
+def _run_routed_reviews(
+    routed: list[_RoutedFile],
+    blob_hashes: dict[str, str | None],
+    prompts: dict[str, AgentPrompt],
+    cache: AgentCache,
+    reviewer: Reviewer,
+    max_workers: int,
+) -> list[FileReviewResult]:
+    """
+    Fans `routed` out across a thread pool and collects every
+    FileReviewResult -- split out of run_review() so the pool's own
+    submit/as_completed loop doesn't add to that function's own nesting.
+    """
+    if not routed:
+        return []
+    results: list[FileReviewResult] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [
+            pool.submit(
+                _review_one_file,
+                path,
+                agents,
+                diff_text,
+                blob_hashes.get(path),
+                prompts,
+                cache,
+                reviewer,
+                truncated=was_truncated,
+            )
+            for path, agents, diff_text, was_truncated in routed
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            results.append(future.result())
+    return results
+
+
+def _apply_suppressions(
+    repo_root: Path, results: list[FileReviewResult]
+) -> tuple[list[FileReviewResult], list[suppressions_mod.SuppressedFinding]]:
+    """
+    Filters every result's findings against the target repo's own
+    `.claude/ignore-findings.yml` (see suppressions.py) -- split out of
+    run_review() so its own per-result loop/branch don't add to that
+    function's nesting. Must only ever be called AFTER every result is
+    final and AFTER caching (cache.put() already recorded the raw,
+    unsuppressed findings) -- never earlier. That ordering is what lets
+    editing ignore-findings.yml take effect on the very next run with
+    zero cache invalidation and zero fresh model calls: caching only ever
+    sees the specialist's real output, and this is a pure
+    presentation-layer filter on top of it. Returns `results` unchanged
+    (and nothing suppressed) when the target repo has no suppressions
+    file at all -- `log_suppressions` is then correctly never called
+    either, matching "no suppressions configured" rather than logging an
+    empty run.
+    """
+    loaded_suppressions = suppressions_mod.load_suppressions(repo_root)
+    if not loaded_suppressions:
+        return results, []
+    all_suppressed: list[suppressions_mod.SuppressedFinding] = []
+    filtered_results: list[FileReviewResult] = []
+    for original in results:
+        kept, suppressed_here = suppressions_mod.filter_findings(
+            original.path, original.findings, loaded_suppressions
+        )
+        if suppressed_here:
+            all_suppressed.extend(suppressed_here)
+            filtered_results.append(dataclasses.replace(original, findings=kept))
+        else:
+            filtered_results.append(original)
+    suppressions_mod.log_suppressions(repo_root, all_suppressed)
+    return filtered_results, all_suppressed
+
+
 def run_review(
     repo_root: Path,
     base_ref: str | None,
@@ -273,93 +429,19 @@ def run_review(
     max_files: int | None = None,
 ) -> ReviewRun:
     resolved_base = git_utils.resolve_base_ref(repo_root, base_ref)
-    changed = [
-        c
-        for c in git_utils.changed_files(repo_root, resolved_base)
-        if c.status != "D"
-        and not c.path.startswith(_ALWAYS_IGNORED_PREFIXES)
-        and not routing.is_excluded_from_review(c.path)
-    ]
 
-    # Each changed file's diff is fetched exactly once here and threaded
-    # through to _review_one_file, instead of being fetched again inside
-    # it -- a duplicate git subprocess call per file that used to double
-    # the git overhead of every run (and a fresh-repo/agent-init scan,
-    # which diffs against the empty-tree sentinel and so treats every
-    # tracked file as "added," is exactly the case where that overhead
-    # scales with the whole repo, not just a PR's file count).
-    routed: list[tuple[str, list[str], str, bool]] = []
-    for changed_file in changed:
-        diff_text = git_utils.diff_for_file(repo_root, resolved_base, changed_file.path)
-        if routing.is_semantic_noise(diff_text):
-            continue
-        decision = routing.route_file(changed_file.path, diff_text)
-        if decision.agents:
-            diff_text, was_truncated = _truncate_diff(diff_text)
-            routed.append((changed_file.path, decision.agents, diff_text, was_truncated))
-
-    skipped_for_budget: list[str] = []
-    if max_files is not None and len(routed) > max_files:
-        # Prioritize by how many specialists routing.py's own (zero-cost,
-        # already-computed) decision matched, as a proxy for how broad a
-        # file's risk surface is -- a file that tripped patterns for
-        # three specialists is a more informative use of a limited budget
-        # than one that tripped a single narrow pattern. Ties broken by
-        # path for determinism.
-        routed.sort(key=lambda r: (-len(r[1]), r[0]))
-        skipped_for_budget = [r[0] for r in routed[max_files:]]
-        routed = routed[:max_files]
+    routed = _route_changed_files(repo_root, resolved_base)
+    routed, skipped_for_budget = _apply_file_budget(routed, max_files)
 
     cache.prune_missing({path for path, _, _, _ in routed})
-
     # One batched call instead of one `git hash-object` subprocess per
     # routed file.
     blob_hashes = git_utils.blob_hashes(repo_root, [path for path, _, _, _ in routed])
 
-    results: list[FileReviewResult] = []
-    if routed:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [
-                pool.submit(
-                    _review_one_file,
-                    path,
-                    agents,
-                    diff_text,
-                    blob_hashes.get(path),
-                    prompts,
-                    cache,
-                    reviewer,
-                    truncated=was_truncated,
-                )
-                for path, agents, diff_text, was_truncated in routed
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                results.append(future.result())
-
+    results = _run_routed_reviews(routed, blob_hashes, prompts, cache, reviewer, max_workers)
     cache.save()
 
-    # Suppression is applied here -- after every result is final, after
-    # caching (cache.put() above already recorded the raw, unsuppressed
-    # findings_text) -- never earlier. That ordering is what lets editing
-    # .claude/ignore-findings.yml take effect on the very next run with
-    # zero cache invalidation and zero fresh model calls: caching only
-    # ever sees the specialist's real output, and this is a pure
-    # presentation-layer filter on top of it.
-    all_suppressed: list[suppressions_mod.SuppressedFinding] = []
-    loaded_suppressions = suppressions_mod.load_suppressions(repo_root)
-    if loaded_suppressions:
-        filtered_results: list[FileReviewResult] = []
-        for original in results:
-            kept, suppressed_here = suppressions_mod.filter_findings(
-                original.path, original.findings, loaded_suppressions
-            )
-            if suppressed_here:
-                all_suppressed.extend(suppressed_here)
-                filtered_results.append(dataclasses.replace(original, findings=kept))
-            else:
-                filtered_results.append(original)
-        results = filtered_results
-        suppressions_mod.log_suppressions(repo_root, all_suppressed)
+    results, all_suppressed = _apply_suppressions(repo_root, results)
 
     # Deterministic output order regardless of thread completion order.
     results.sort(key=lambda r: r.path)
