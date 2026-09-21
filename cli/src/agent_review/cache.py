@@ -10,6 +10,27 @@ instead of spending a model call on it again.
 This is deliberately a flat JSON file rather than a database: the cache is
 small (one entry per reviewed file), human-inspectable, and needs no
 dependency beyond the standard library.
+
+**Schema version 2** (milestone 1, "finding lifecycle and CI policy"):
+each agent's raw response text is now stored SEPARATELY, keyed by that
+agent's name (`per_agent`), instead of concatenated into one combined
+string. Version 1 lost this attribution -- every finding replayed from
+cache got the placeholder agent name `"cached"` (still documented, for
+historical context, in sarif.py's and rules.py's docstrings), which
+created a real correctness bug once rule_id/fingerprint were introduced:
+a finding's rule_id depends on which agent produced it (see rules.py), so
+the SAME finding would get a DIFFERENT rule_id -- and therefore a
+DIFFERENT fingerprint -- on a cache-hit run than it got on the live run
+that originally cached it, silently reclassifying it as "new" in
+baseline.py's terms every time it was served from cache. Storing
+per-agent text fixes this at the root: a cache-hit replay now parses each
+agent's own text under its own real name, via the exact same
+`rules.attach_rule_ids(agent, diff_text, ...)` call the live path uses --
+so a finding's rule_id (and fingerprint) is identical whether it came
+from a live call or a cache hit. A version-1 manifest is simply treated
+as empty (see `load()` below) and repopulated on the next run -- the same
+graceful handling this module already gives a corrupt or missing
+manifest, so this needed no migration code, only the version bump.
 """
 
 from __future__ import annotations
@@ -22,14 +43,13 @@ from typing import Any
 
 CACHE_DIRNAME = ".agent-cache"
 MANIFEST_FILENAME = "manifest.json"
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
 
 
 @dataclasses.dataclass
 class CachedFileEntry:
     blob_hash: str
-    agents: list[str]
-    findings_text: str
+    per_agent: dict[str, str]
     reviewed_at: float
 
 
@@ -65,10 +85,12 @@ class AgentCache:
         entries: dict[str, CachedFileEntry] = {}
         for path, data in raw.get("files", {}).items():
             try:
+                per_agent = dict(data["per_agent"])
+                if not all(isinstance(k, str) and isinstance(v, str) for k, v in per_agent.items()):
+                    continue
                 entries[path] = CachedFileEntry(
                     blob_hash=data["blob_hash"],
-                    agents=list(data["agents"]),
-                    findings_text=data["findings_text"],
+                    per_agent=per_agent,
                     reviewed_at=float(data["reviewed_at"]),
                 )
             except (KeyError, TypeError, ValueError):
@@ -87,13 +109,16 @@ class AgentCache:
 
     # -- lookups ---------------------------------------------------------
 
-    def get_if_fresh(self, path: str, blob_hash: str, agents: list[str]) -> str | None:
-        """Return cached findings text for `path` if the cache has an
-        entry for the exact same blob hash and the exact same set of
+    def get_if_fresh(self, path: str, blob_hash: str, agents: list[str]) -> dict[str, str] | None:
+        """Return `{agent: raw_findings_text}` for `path` if the cache has
+        an entry for the exact same blob hash and the exact same set of
         routed agents. Otherwise None (cache miss -- must re-analyze).
         A changed agent set counts as a miss even with the same blob hash,
         since a different (or expanded) set of agents may find something
-        the cached run never looked for.
+        the cached run never looked for. Returning the mapping (rather
+        than one merged string, as schema version 1 did) is what lets a
+        cache-hit replay parse each agent's own text under its own real
+        name -- see this module's docstring.
         """
         if not self._loaded:
             self.load()
@@ -102,17 +127,16 @@ class AgentCache:
             return None
         if entry.blob_hash != blob_hash:
             return None
-        if sorted(entry.agents) != sorted(agents):
+        if sorted(entry.per_agent) != sorted(agents):
             return None
-        return entry.findings_text
+        return entry.per_agent
 
-    def put(self, path: str, blob_hash: str, agents: list[str], findings_text: str) -> None:
+    def put(self, path: str, blob_hash: str, per_agent: dict[str, str]) -> None:
         if not self._loaded:
             self.load()
         self._entries[path] = CachedFileEntry(
             blob_hash=blob_hash,
-            agents=list(agents),
-            findings_text=findings_text,
+            per_agent=dict(per_agent),
             reviewed_at=time.time(),
         )
 
