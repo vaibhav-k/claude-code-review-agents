@@ -23,7 +23,10 @@ import json
 import sys
 from pathlib import Path
 
+from . import baseline as baseline_mod
+from . import findings as findings_mod
 from . import git_utils
+from . import rules as rules_mod
 from .agents_client import (
     DEFAULT_MODEL,
     ENV_API_KEY,
@@ -47,6 +50,9 @@ from .orchestrator import FileReviewResult, ReviewRun, run_review
 from .prompts import load_agent_prompts
 from .sarif import to_sarif
 from .suppressions import SUPPRESSIONS_PATH
+
+# ("CRITICAL", "HIGH", "MEDIUM", "LOW") -- dict preserves insertion order.
+_VALID_FAIL_ON_SEVERITIES = tuple(findings_mod.SEVERITY_ORDER)
 
 _REVIEW_CMD = "review"
 _COMMIT_CMD = "commit"
@@ -75,7 +81,7 @@ def _load_dotenv_if_present() -> None:
     over a nice-to-have.
     """
     try:
-        from dotenv import find_dotenv, load_dotenv  # noqa: PLC0415
+        from dotenv import find_dotenv, load_dotenv  # noqa: PLC0415 -- optional,
 
         # deferred so a missing python-dotenv can never break commands
         # that don't need .env support at all (e.g. --help).
@@ -189,7 +195,26 @@ def _print_suppressed(run: ReviewRun) -> None:
         print(f"  {s.path}: [{s.finding.severity}] {s.finding.location} — {s.reason}")
 
 
+def _print_resolved(resolved: list[baseline_mod.BaselineEntry]) -> None:
+    # Never a failure signal (see baseline.resolved_entries' own
+    # docstring) -- purely informational, in the same "Note:" family as
+    # _print_suppressed/_print_skipped_for_budget above.
+    if not resolved:
+        return
+    print(
+        f"Note: {len(resolved)} finding(s) in the baseline were not reported this run "
+        "(resolved, or no longer detected):"
+    )
+    for entry in resolved:
+        print(f"  {entry.location}: [{entry.severity}] {entry.rule_id} — {entry.title}")
+
+
 def _print_findings(run: ReviewRun) -> None:
+    # The original, baseline-unaware rendering -- used only when neither
+    # --baseline nor --new-only was given, so this stays byte-for-byte
+    # identical to every prior release's default output (see
+    # backward-compatibility requirements in DESIGN.md's "Finding
+    # lifecycle and CI policy" section).
     if not run.all_findings:
         print("No high-impact issues found.")
         return
@@ -198,7 +223,38 @@ def _print_findings(run: ReviewRun) -> None:
         print()
 
 
-def _print_review(run: ReviewRun) -> None:
+# NEW/EXISTING padded to the same column width ("EXISTING" is the longer
+# of the two words) so a human scanning a mixed list can visually align
+# the locations that follow, e.g.:
+#   [HIGH] NEW       src/auth.py:143 — ...
+#   [MEDIUM] EXISTING src/foo.py:81 — ...
+_STATUS_COLUMN_WIDTH = len("EXISTING") + 1
+
+
+def _print_findings_with_status(classified: list[baseline_mod.Classification]) -> None:
+    if not classified:
+        print("No high-impact issues found.")
+        return
+    for c in classified:
+        f = c.finding
+        status_label = c.status.upper().ljust(_STATUS_COLUMN_WIDTH)
+        print(f"[{f.severity}] {status_label}{f.location} — {f.title}")
+        print(f"Impact: {f.impact}")
+        print(f"Fix: {f.fix}")
+        print()
+
+
+def _print_review(
+    run: ReviewRun,
+    classified: list[baseline_mod.Classification] | None = None,
+    resolved: list[baseline_mod.BaselineEntry] | None = None,
+) -> None:
+    """`classified`/`resolved` are only non-None when --baseline and/or
+    --new-only were given (see cmd_review) -- with neither, this prints
+    exactly what every prior release printed. `classified` is already
+    whatever --new-only did or didn't filter it down to; this function
+    itself never re-filters.
+    """
     print(f"Base ref: {run.base_ref}")
     print(
         f"Files analyzed: {len(run.files)}  "
@@ -210,11 +266,42 @@ def _print_review(run: ReviewRun) -> None:
     _print_truncated_files(run)
     _print_skipped_for_budget(run)
     _print_suppressed(run)
+    if resolved:
+        _print_resolved(resolved)
     print()
-    _print_findings(run)
+    if classified is None:
+        _print_findings(run)
+    else:
+        _print_findings_with_status(classified)
 
 
-def _review_run_to_dict(run: ReviewRun) -> dict:
+def _finding_to_dict(c: baseline_mod.Classification, include_status: bool) -> dict:
+    """One finding's JSON representation -- extends the pre-existing
+    plain `dataclasses.asdict(finding)` shape additively: every field
+    that shape already had is unchanged, `rule_id` (already a Finding
+    field, but always resolved through rules.effective_rule_id here so
+    it's never an empty string) and `fingerprint` are always added, and
+    `status` ("new"/"existing") is added only when a baseline was
+    actually supplied -- see cmd_review's `include_status`, and
+    DESIGN.md's compatibility note on why status is omitted rather than
+    defaulted to "new" for callers that never asked for baseline
+    classification at all.
+    """
+    d = dataclasses.asdict(c.finding)
+    d["rule_id"] = rules_mod.effective_rule_id(c.finding)
+    d["fingerprint"] = c.fingerprint
+    if include_status:
+        d["status"] = c.status
+    return d
+
+
+def _review_run_to_dict(
+    run: ReviewRun,
+    classified: list[baseline_mod.Classification],
+    baseline: baseline_mod.Baseline | None,
+    resolved: list[baseline_mod.BaselineEntry],
+    baseline_updated_path: str | None,
+) -> dict:
     """Structured form of a ReviewRun for `--json`, so a CI/CD pipeline
     can consume findings (and the same warnings _print_review shows a
     human) programmatically -- without regex-parsing this tool's own
@@ -222,8 +309,17 @@ def _review_run_to_dict(run: ReviewRun) -> dict:
     to remove. Deliberately built here, not on ReviewRun/Finding
     themselves: this is an output-format concern, kept alongside the rest
     of this module's rendering (_print_review, the plain-text default).
+
+    `classified` is the (possibly --new-only-filtered) list that becomes
+    the "findings" key -- same list cmd_review already computed for
+    human output, so JSON and text output are always in agreement about
+    which findings were selected. `baseline`/`resolved` are only used to
+    decide whether to add the additive "baseline" key at all (None means
+    --baseline was never supplied, so the whole key -- and each
+    finding's "status" -- is omitted for full backward compatibility with
+    a consumer written against the pre-milestone-1 schema).
     """
-    return {
+    payload: dict = {
         "base_ref": run.base_ref,
         "files_analyzed": len(run.files),
         "cache_hits": run.cache_hits,
@@ -247,12 +343,87 @@ def _review_run_to_dict(run: ReviewRun) -> dict:
             }
             for s in run.suppressed
         ],
-        "findings": [dataclasses.asdict(finding) for finding in run.all_findings],
+        "findings": [_finding_to_dict(c, include_status=baseline is not None) for c in classified],
     }
+    if baseline is not None:
+        payload["baseline"] = {
+            "new_count": sum(1 for c in classified if c.status == "new"),
+            "existing_count": sum(1 for c in classified if c.status == "existing"),
+            "resolved": [dataclasses.asdict(e) for e in resolved],
+        }
+    if baseline_updated_path is not None:
+        payload["baseline_updated"] = baseline_updated_path
+    return payload
+
+
+def _resolve_baseline_path(repo: Path, raw: str | None) -> Path:
+    candidate = Path(raw) if raw else baseline_mod.DEFAULT_BASELINE_PATH
+    return candidate if candidate.is_absolute() else repo / candidate
+
+
+def _parse_fail_on(raw: str | None) -> int | None:
+    """Parses --fail-on's comma-separated severity list (e.g.
+    "critical,high") into a single threshold rank using
+    findings.SEVERITY_ORDER, where "at or above the configured threshold"
+    means "rank <= this value." Multiple severities collapse to the rank
+    of the LEAST severe one given -- "critical,high" and "high" alone are
+    therefore equivalent, since "at or above high" already covers
+    critical; this is what lets a non-contiguous-looking list still mean
+    exactly what a reader expects ("fail on anything this bad or worse").
+    Returns None when --fail-on wasn't given at all (no additional
+    gating, independent of the pre-existing --fail-on-findings flag).
+    Raises ValueError -- turned into a clean SystemExit by the caller --
+    for an empty or unrecognized severity name, so a typo like
+    "--fail-on hihg" fails loudly at argument time instead of silently
+    gating on nothing.
+    """
+    if raw is None:
+        return None
+    severities = [s.strip().upper() for s in raw.split(",") if s.strip()]
+    if not severities:
+        raise ValueError("--fail-on requires at least one severity")
+    invalid = sorted({s for s in severities if s not in _VALID_FAIL_ON_SEVERITIES})
+    if invalid:
+        raise ValueError(
+            f"--fail-on: unknown severity/severities {invalid} -- valid values are "
+            f"{', '.join(s.lower() for s in _VALID_FAIL_ON_SEVERITIES)} (comma-separated)"
+        )
+    return max(findings_mod.SEVERITY_ORDER[s] for s in severities)
 
 
 def cmd_review(args: argparse.Namespace) -> int:
     repo = _resolve_git_repo(args.path)
+
+    try:
+        fail_on_threshold = _parse_fail_on(args.fail_on)
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from exc
+
+    # Baseline loading is a cheap, local, no-network precondition -- same
+    # "fail fast before spending API access" philosophy cmd_commit already
+    # uses for its own staged-changes check -- so it happens before
+    # _build_reviewer, which requires a valid Foundry configuration.
+    # baseline_path stays None (and nothing is read) unless --baseline or
+    # --update-baseline was actually given: a plain `agent-review --path
+    # X` must never start consulting a baseline just because one happens
+    # to exist on disk (see baseline.py's module docstring).
+    loaded_baseline: baseline_mod.Baseline | None = None
+    baseline_path: Path | None = None
+    if args.baseline or args.update_baseline:
+        baseline_path = _resolve_baseline_path(repo, args.baseline)
+        if baseline_path.is_file():
+            try:
+                loaded_baseline = baseline_mod.load_baseline(baseline_path)
+            except baseline_mod.BaselineError as exc:
+                raise SystemExit(f"error: {exc}") from exc
+        elif args.baseline and not args.update_baseline:
+            raise SystemExit(
+                f"error: baseline file not found: {baseline_path} "
+                "(pass --update-baseline to create it)"
+            )
+        # else: the baseline file doesn't exist yet and --update-baseline
+        # is set -- not an error, this run will create it.
+
     prompts = load_agent_prompts(repo)
     cache = AgentCache(repo)
     reviewer = _build_reviewer(args)
@@ -270,16 +441,86 @@ def cmd_review(args: argparse.Namespace) -> int:
         # Surface API/network failures cleanly, not as a raw traceback
         # from inside a worker thread.
         raise SystemExit(f"error: review failed: {exc}") from exc
+
+    # Suppression already happened inside run_review(); baseline
+    # classification is a second, independent, purely presentational
+    # layer on top of whatever survived that -- see baseline.py's module
+    # docstring on why the two concepts are kept distinct (a suppressed
+    # finding is never in run.all_findings, so it can never be
+    # classified as NEW or EXISTING here; that's covered by --update-
+    # baseline's own separate suppressed-findings handling below).
+    all_classified = baseline_mod.classify(run.all_findings, loaded_baseline)
+    display = [c for c in all_classified if c.status == "new"] if args.new_only else all_classified
+    resolved = (
+        baseline_mod.resolved_entries(run.all_findings, loaded_baseline)
+        if loaded_baseline is not None
+        else []
+    )
+
+    baseline_updated_path: str | None = None
+    if args.update_baseline:
+        assert baseline_path is not None  # guaranteed by the block above
+        # Includes suppressed findings: a suppression is a display-time
+        # decision, not evidence the underlying finding stopped existing
+        # (see baseline.py's module docstring) -- so an unsuppressed
+        # finding never spuriously reappears as "new" just because it
+        # happened to be suppressed the last time the baseline was
+        # captured. --new-only never affects what's written here: the
+        # baseline always captures the FULL current state, independent of
+        # what this particular run chose to display or evaluate.
+        findings_for_baseline = run.all_findings + [s.finding for s in run.suppressed]
+        try:
+            baseline_mod.write_baseline(baseline_path, findings_for_baseline)
+        except baseline_mod.BaselineError as exc:
+            raise SystemExit(f"error: {exc}") from exc
+        baseline_updated_path = str(baseline_path)
+
     if args.sarif:
-        print(json.dumps(to_sarif(run), indent=2))
+        print(
+            json.dumps(
+                to_sarif(run, baseline=loaded_baseline, new_only=args.new_only),
+                indent=2,
+            )
+        )
     elif args.json:
-        print(json.dumps(_review_run_to_dict(run), indent=2))
+        print(
+            json.dumps(
+                _review_run_to_dict(
+                    run,
+                    classified=display,
+                    baseline=loaded_baseline,
+                    resolved=resolved,
+                    baseline_updated_path=baseline_updated_path,
+                ),
+                indent=2,
+            )
+        )
     else:
-        _print_review(run)
-    if args.fail_on_findings:
-        has_blocking = any(f.severity in ("CRITICAL", "HIGH") for f in run.all_findings)
-        return 1 if has_blocking else 0
-    return 0
+        show_status = loaded_baseline is not None or args.new_only or args.update_baseline
+        _print_review(
+            run,
+            classified=display if show_status else None,
+            resolved=resolved if show_status else None,
+        )
+        if baseline_updated_path is not None:
+            print(f"Baseline written to {baseline_updated_path}.")
+
+    exit_code = 0
+    # Unchanged from every prior release: --fail-on-findings always
+    # evaluates the full, baseline/--new-only-independent finding set --
+    # see cli/README.md's flag docs for why the two flags are kept fully
+    # independent rather than one superseding the other.
+    has_blocking = any(f.severity in ("CRITICAL", "HIGH") for f in run.all_findings)
+    if args.fail_on_findings and has_blocking:
+        exit_code = 1
+    if fail_on_threshold is not None:
+        eval_findings = [c.finding for c in display]
+        if any(
+            findings_mod.SEVERITY_ORDER.get(f.severity, 99) <= fail_on_threshold
+            for f in eval_findings
+        ):
+            exit_code = 1
+    return exit_code
 
 
 def cmd_commit(args: argparse.Namespace) -> int:
@@ -454,6 +695,53 @@ def build_review_parser() -> argparse.ArgumentParser:
             "whenever a later run's file set fits under the cap. For a "
             "pathologically wide diff (a huge rename, a generated-content "
             "commit) rather than for everyday use."
+        ),
+    )
+    review.add_argument(
+        "--baseline",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Path to a baseline file used to classify each finding as NEW or "
+            f"EXISTING by fingerprint (default when --update-baseline is given "
+            f"without this flag: {baseline_mod.DEFAULT_BASELINE_PATH.as_posix()}). "
+            "A normal review never writes to this file -- only --update-baseline "
+            "does. Missing when explicitly given (and --update-baseline isn't "
+            "also set), or malformed/an unsupported schema version: a clear "
+            "error, not a silent empty baseline."
+        ),
+    )
+    review.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help=(
+            "Create or replace the baseline file (at --baseline, or the default "
+            f"{baseline_mod.DEFAULT_BASELINE_PATH.as_posix()} if --baseline isn't "
+            "given) with this run's findings, written atomically. Findings "
+            f"suppressed by {SUPPRESSIONS_PATH.as_posix()} are still included, "
+            "for auditability -- see baseline.py's module docstring."
+        ),
+    )
+    review.add_argument(
+        "--new-only",
+        action="store_true",
+        help=(
+            "Only display/evaluate findings whose fingerprint is not already in "
+            "the baseline (requires --baseline to have any effect; a harmless "
+            'no-op without one, since every finding is then already "new").'
+        ),
+    )
+    review.add_argument(
+        "--fail-on",
+        default=None,
+        metavar="SEVERITY[,SEVERITY...]",
+        help=(
+            "Exit with status 1 if any finding selected for evaluation (after "
+            "--baseline/--new-only filtering, if given) is at or above the "
+            "least severe threshold in this comma-separated list -- e.g. "
+            "'high' or 'critical,high'. Valid values: "
+            f"{', '.join(s.lower() for s in _VALID_FAIL_ON_SEVERITIES)}. "
+            "Independent of --fail-on-findings above."
         ),
     )
     output_format = review.add_mutually_exclusive_group()

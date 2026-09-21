@@ -128,7 +128,12 @@ def test_sarif_flag_emits_a_valid_sarif_log_instead_of_text(monkeypatch, tmp_pat
     sarif_run = log["runs"][0]
     assert sarif_run["tool"]["driver"]["name"] == "agent-review"
     result = sarif_run["results"][0]
-    assert result["ruleId"] == "security-review"
+    # The diff contains an f-string-built SELECT (see FakeReviewer's
+    # scripted handlers.py content above), which rules.py's
+    # security-review INJECTION category pattern matches -- see rules.py
+    # for the full deterministic rule_id derivation.
+    assert result["ruleId"] == "SEC-INJECTION-001"
+    assert result["properties"]["agent"] == "security-review"
     assert result["level"] == "error"  # CRITICAL -> error
     assert "SQL injection" in result["message"]["text"]
 
