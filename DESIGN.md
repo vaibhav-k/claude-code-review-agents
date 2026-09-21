@@ -2113,16 +2113,354 @@ can flake on a GitHub outage or, as just demonstrated, a moved URL).
 `pytest.importorskip` so its absence skips that one test rather than
 failing collection for the whole suite.
 
-**Known limitation, inherited rather than introduced.** A finding
+**Known limitation, inherited rather than introduced.** ~~A finding
 replayed from `.agent-cache/` has `Finding.agent == "cached"` — the
 cache stores combined text per file, not attributed per specialist (see
 `cache.py`), so the specialist that originally produced a cached finding
-isn't preserved. Such findings render under a `cached` SARIF rule
-(with a `shortDescription` that says exactly this) rather than under the
-real specialist. This is not new: `--json` output already has the same
-`"agent": "cached"` string in every cached finding today. Actually fixing
-it would mean caching per-agent raw text instead of one combined blob
-per file — a real, separable change to `cache.py` and
-`orchestrator._review_one_file()`, out of scope for a rendering-layer
-feature, and now written down here rather than silently absorbed into
-SARIF's blast radius.
+isn't preserved.~~ **Fixed in 0.11.0** (see "Finding lifecycle and CI
+policy" below): the cache now stores each agent's raw text separately
+(`CACHE_SCHEMA_VERSION` 1 → 2), so a cache-hit replay carries the real
+specialist name again, not the placeholder `"cached"`. This was no
+longer just a rendering-layer cosmetic gap once rule IDs and
+fingerprints (also 0.11.0) started depending on the true agent name —
+an unattributed cache replay would otherwise assign a *different*
+rule ID and fingerprint than the original live call for the identical
+finding, which is exactly the kind of instability the fingerprint
+design most needs to avoid. `Finding.agent == "cached"` can still
+appear for a manifest written before this fix (an old
+`CACHE_SCHEMA_VERSION` 1 entry is treated as a plain cache miss and
+repopulated on the next run, so this self-heals automatically — see
+`cache.py`'s module docstring) and the `CACHED-GENERIC-001` rule ID/SARIF
+rule documented below still exists as a deliberate fallback for the
+data-shape case (not really reachable anymore in normal operation, but
+kept rather than special-cased away, since a future caching change could
+plausibly reintroduce a "no reliable specialist name" case worth having
+a documented, non-crashing fallback for).
+
+### Finding lifecycle and CI policy (implemented in 0.11.0)
+
+**Why this, and why now.** Every prior feature answered "what did this
+run find and how is it shown." Nothing yet answered "is this new, and
+should this specific CI run fail because of it" across *multiple* runs —
+the question a real CI gate actually needs answered, since a repo with
+an existing backlog of MEDIUM findings can't gate on "any finding exists"
+without either fixing the backlog first or ignoring the gate. This
+milestone adds exactly five capabilities on top of the existing
+severity/output model, and deliberately nothing else: stable rule IDs,
+stable finding fingerprints, a baseline file, `--new-only` filtering, and
+`--fail-on SEVERITY[,...]`. PR/GitHub/GitLab/Azure integration,
+PR-aware context, routing/cost telemetry, semantic cross-agent dedup,
+generated test suggestions, new specialist agents, and any change to the
+7 specialist boundaries are all explicitly out of scope — the interfaces
+below are deliberately left in a shape that doesn't foreclose any of
+those later, but none of them are implemented here.
+
+**Backward compatibility is the hard constraint this whole design
+answers to.** With none of the four new flags passed, `agent-review
+--path X` must behave exactly as it did in 0.10.x: identical human
+output, identical `--json`/`--sarif` shapes (only additive new keys),
+identical exit-code semantics, identical suppression behavior, and every
+pre-existing test (fake-model and cassette-based alike) must keep passing
+unmodified. Nobody should have to create a baseline file merely to keep
+using the CLI they already had.
+
+**Rule IDs (`rules.py`, new module).** A rule ID must be deterministic,
+must not depend on the model's own generated prose (a model asked to
+invent an ID would be free to invent a different one for the same defect
+next time, or the same one for two different defects), and must map
+cleanly onto SARIF's `ruleId`. The design classifies against the
+**diff text being reviewed**, not the model's response — this is the one
+piece of information that already exists deterministically, before any
+model call, in `orchestrator.py`. `rule_id_for(agent, diff_text)` runs a
+small, per-agent, ordered list of regex categories (e.g.
+security-review's diff text matching an f-string/concatenation query
+pattern → `SEC-INJECTION-001`; a deserialization call → `SEC-DESER-001`)
+and falls back to a domain-level ID (`SEC-GENERAL-001`, `DATA-GENERAL-001`,
+etc., one per agent — see `_DOMAIN_PREFIX`) when no specific category
+matches, per the spec's own instruction not to force a fake specific ID
+onto every finding.
+
+This is a **fresh, standalone pattern table**, not a refactor of
+`routing.py`'s existing `_AGENT_PATTERNS` — routing decides *which*
+specialist(s) see a file at all, at the whole-file/whole-diff level,
+using patterns tuned for that job; rule-ID classification decides *which
+category within an agent's domain* a finding most likely belongs to,
+using its own separately-tuned pattern list. Sharing state between them
+would risk a routing-pattern change silently reclassifying rule IDs (or
+vice versa) with no test able to tell the difference until a rule ID
+quietly moved. The two tables can and likely will drift from each other
+in wording over time — that's an accepted, deliberate cost of keeping
+`routing.py`'s tested behavior fully untouched.
+
+**Deliberate, documented limitation of rule IDs: per-(file, agent)
+granularity, not per-finding.** `attach_rule_ids()` classifies the
+*whole file's diff text* once per agent, then assigns that single rule ID
+to every finding that agent reports for that file. A specialist that
+reports two structurally different findings in the same file (rare, but
+possible — e.g. security-review flagging both an injection point and a
+weak-crypto call in one file) gets the same rule ID on both. Fixing this
+would mean either the model naming its own finding's category (which the
+spec explicitly rules out — the model's prose is exactly what a rule ID
+must not depend on) or a second, separate classification pass keyed off
+each finding's own `location`/`title` text after the fact, which
+reintroduces a version of the "classify off the model's own prose"
+problem the diff-text approach was chosen specifically to avoid, since a
+finding's `title` is still model-generated wording, only now attached
+to a rule ID that's supposed to be prose-independent. Left as a known
+gap rather than "solved" with a compromise that reintroduces the very
+dependency this feature exists to eliminate; `RULE_METADATA`'s
+descriptions are written to be accurate for the *category*, not a
+promise that a mixed-category file's second finding was individually
+classified.
+
+A finding that predates rule IDs, or was constructed directly (as many
+test fixtures do) without going through `attach_rule_ids()`, has
+`Finding.rule_id == ""`; `rules.effective_rule_id(finding)` is the one
+correct way to read a finding's rule ID everywhere (SARIF, the baseline,
+fingerprinting) — it falls back to that finding's agent-level domain ID
+rather than ever emitting an empty string. Cache-hit replays get the same
+rule ID a live call would have (see the cache-attribution fix above) —
+this only works because `attach_rule_ids()` is called identically on
+both the live-call and cache-hit code paths in `orchestrator.py`, using
+the real per-agent diff text stored (as of the 0.11.0 cache-schema bump)
+under its own agent key.
+
+**Fingerprints (`fingerprint.py`, new module).** `compute(finding)` is a
+sha256 of `"v1\n{rule_id}\n{normalized_path}\n{normalized_title}"` — a
+versioned, documented, four-input hash, deliberately excluding line
+number, `impact`, `fix`, and any timestamp:
+
+- **Line number** is excluded entirely, not tolerated within a window —
+  the spec's own preference for "a false NEW over an incorrectly merged
+  pair of different defects" argues against inventing a heuristic
+  distance threshold that would inevitably be wrong at its edges; simply
+  never keying on it means line movement of any size (an unrelated edit
+  above the finding, a reformat) never breaks the match, at the cost of
+  also never distinguishing two genuinely different findings that happen
+  to share a rule ID, path, and normalized title but sit at different
+  lines — treated as the same finding, which given the other three
+  fields already narrowing the match is judged the far more common case.
+- **`impact`/`fix`** are the model's own free-form prose and can
+  legitimately reword between runs for the identical underlying defect;
+  hashing them would make the fingerprint break on paraphrasing alone.
+- **`title`** IS part of the hash (after normalization — see below), not
+  excluded, since it's the one piece of model-generated text that
+  actually identifies *what* the finding is about in the absence of a
+  finer-grained rule ID; `normalize_title()` lowercases it, collapses
+  internal whitespace, and strips leading/trailing whitespace and
+  trailing punctuation specifically so that cosmetic-only rewording
+  (case, an added period, doubled spaces) doesn't change the fingerprint,
+  while a substantively different title still does.
+- **`normalize_path()`** converts backslashes to forward slashes and
+  strips a leading `./`, so the same repo-relative path fingerprints
+  identically whether it came from a Windows or POSIX checkout.
+
+**Documented limitations of this fingerprint, stated plainly rather than
+glossed over:**
+
+1. It is **not a semantic identity**. Two textually different findings
+   that happen to share a rule ID, path, and a title that normalizes
+   identically will collide (rare in practice, since `title` is fairly
+   specific, but possible). Conversely, the model rewording a title more
+   than cosmetically for the same underlying defect produces a fresh
+   fingerprint — read as a "new" finding even though a human would call
+   it the same issue. This is the direct, accepted cost of never running
+   any actual semantic comparison (the spec explicitly forbids "unreliable
+   semantic matching just to make fingerprints appear clever").
+2. It carries **no line-movement tolerance beyond "none"** — see above.
+3. It is tied to **rule-ID granularity**, and therefore inherits that
+   system's own per-(file, agent) limitation: two structurally different
+   findings in the same file from the same agent share a rule ID, and if
+   their titles also happen to normalize to the same string, they'd
+   collide on fingerprint too — narrower in practice than it sounds,
+   since two genuinely different findings almost never share an exact
+   normalized title, but not impossible.
+
+`FINGERPRINT_VERSION = "v1"` is baked into the hash input itself (not
+just a comment) specifically so that a future, deliberately different
+fingerprint algorithm can ship as `"v2"` without ever silently colliding
+with a `"v1"`-era baseline entry — a `v1` and `v2` fingerprint of the
+identical finding are guaranteed to differ, which is what forces an
+explicit `--update-baseline` (and a human decision about the resulting
+"everything looks new" transition) rather than a silent, wrong merge.
+
+**Baseline file (`baseline.py`, new module).** A versioned JSON file
+(default `.agent-review/baseline.json`, overridable with
+`--baseline PATH`) recording, per finding, exactly six structured fields:
+`fingerprint`, `rule_id`, `severity`, `agent`, `location`, `title` — no
+`impact`/`fix` prose, for the same reason the fingerprint itself excludes
+them, and so a `git diff` of a baseline update in a PR stays readable
+rather than dominated by paragraphs of model-generated text. Two
+operations, cleanly separated:
+
+- **Reading** (`--baseline PATH`): loads the file (raising `BaselineError`
+  — caught at the CLI boundary and turned into a clean, non-zero
+  `SystemExit`, never a raw traceback — for anything short of
+  well-formed JSON with a supported `version` and a `findings` array of
+  well-formed entries) and classifies this run's findings as `"new"`
+  (fingerprint absent from the baseline) or `"existing"` (present).
+  **Never writes anything.**
+- **Writing** (`--update-baseline`, independent of `--baseline` reading —
+  either or both flags can be passed): (re)creates the resolved baseline
+  path from **this run's full finding set**, written atomically
+  (temp file + `os.replace()`, so a process killed mid-write can never
+  leave a truncated baseline on disk). "This run's full finding set"
+  specifically includes findings that were also suppressed by
+  `ignore-findings.yml` — a suppressed finding is still a real,
+  currently-true fact about the codebase, and silently omitting it from
+  the baseline would make it look "new" again the moment someone removed
+  its suppression rule, which is exactly the kind of surprise a baseline
+  exists to prevent. `--update-baseline` is unaffected by `--new-only` —
+  the write set is always "everything found this run," never "only what
+  was new this run."
+
+A **malformed or unsupported-version baseline errors loudly and always**,
+including under `--update-baseline` — it does not silently overwrite a
+baseline a human might still need to look at first, and it does not
+silently treat corrupt input as "no baseline" (which would make every
+previously-known finding look new, quietly flipping any `--fail-on`
+gate's outcome for reasons nobody asked for). The one exception: a
+`--baseline PATH` argument whose file simply doesn't exist yet is *not*
+an error when `--update-baseline` was also passed — that combination is
+exactly "create the baseline for the first time," and `cmd_review` checks
+`path.is_file()` itself before ever calling `load_baseline()`, rather
+than asking that function to distinguish "doesn't exist yet, that's fine"
+from "exists and is garbage, that's not."
+
+A baseline entry whose fingerprint isn't present among this run's current
+findings at all is `resolved` — informational only (printed as a
+"Note:" line, and listed under a `resolved` key in `--json`), never a
+failure; a shrinking backlog should never trip a CI gate.
+
+**`--new-only`.** With a baseline loaded, narrows the displayed and
+`--fail-on`-evaluated finding set to just the `"new"`-classified ones;
+with no baseline at all, every finding is already classified `"new"` (see
+`baseline.classify()`'s own docstring), so `--new-only` is a defined,
+harmless no-op rather than a special case to guard against.
+
+**`--fail-on SEVERITY[,SEVERITY...]`.** Reuses the existing four-tier
+severity model verbatim (`findings.SEVERITY_ORDER`) — no second severity
+system. `_parse_fail_on()` resolves the given severity name(s) to the
+lowest rank among them (e.g. `--fail-on medium,high` gates on "at least
+MEDIUM"), and the exit code is non-zero if *any* finding in the
+**already-filtered display set** (baseline-classified, then
+`--new-only`-narrowed if that flag was also given) meets or exceeds that
+threshold. This is deliberately independent of, and additive to, the
+pre-existing `--fail-on-findings` flag, which keeps its exact original
+meaning (gate on the full unsuppressed finding set existing at all,
+completely unaware of severity, baseline, or new/existing status) — a
+user who already had `--fail-on-findings` in a CI config sees no change
+in behavior from this release. The spec's own worked example is now a
+direct test (`cli/tests/test_cli_baseline_integration.py`):
+`--baseline B --new-only --fail-on high` exits non-zero **only** when a
+*new* (not merely present) finding is HIGH or above — an existing HIGH
+finding already in the baseline, with no new HIGH finding this run, exits
+zero.
+
+**JSON output.** Purely additive: every finding gains `rule_id` and
+`fingerprint` always, and `status` (`"new"`/`"existing"`) only when a
+baseline was supplied (omitted, not `null`, when none was — a consumer's
+existing "has this key" check for old-style output still works
+unchanged). A `"baseline"` object (path, counts, and the `resolved` list)
+appears only when `--baseline`/`--update-baseline` was used, and
+`"baseline_updated"` only when the baseline was actually (re)written this
+run. With none of the four new flags, the emitted JSON is byte-for-byte
+what 0.10.x produced.
+
+**SARIF output.** `to_sarif()` gained two new, optional, default-`None`/
+`False` parameters (`baseline`, `new_only`) rather than a second writer —
+per the spec's own instruction not to build a parallel SARIF path.
+`ruleId`/`ruleIndex` now come from `rules.effective_rule_id(finding)`
+instead of `finding.agent` (a deliberate, spec-mandated break from
+0.10.x's SARIF `ruleId`, which was one rule per *agent*; the specialist's
+identity is preserved anyway, as `properties.agent`, exactly as before),
+`partialFingerprints["agentReview/v1"]` now uses the shared
+`fingerprint.compute()` (versioned key name, so a future fingerprint
+algorithm change is visible in the SARIF output's own key, not just an
+undocumented value change), and each result gains SARIF's own native
+`baselineState` (`"new"`/`"unchanged"` — SARIF 2.1.0's real vocabulary for
+exactly this concept, chosen over inventing a custom `properties` field)
+whenever a baseline was supplied. `rules[]` metadata (`name`,
+`shortDescription`) is looked up from `rules.RULE_METADATA` by rule ID,
+falling back to `f"Custom specialist: {agent}"` for the agent-name-keyed
+`CUSTOM-*` family (preserving the exact fallback text an existing test
+already asserts).
+
+**Suppressions stay a separate, un-redesigned concept.**
+`.claude/ignore-findings.yml` (`suppressions.py`) is applied where it
+always was — after parsing, before the finding ever reaches baseline
+classification or fingerprinting — and nothing about it changed. Baseline
+status (new/existing) and suppression status (suppressed/not) answer two
+different questions and are tracked independently: a finding can be
+`"existing"` in the baseline *and* currently suppressed (both facts stay
+visible — suppression never makes a finding silently vanish from the
+baseline's own record, and `--update-baseline`'s write set, as noted
+above, always includes currently-suppressed findings for exactly this
+reason) or `"new"` and suppressed (a brand-new finding a team has already
+decided, via `ignore-findings.yml`, not to act on). Neither status is
+allowed to overwrite or imply the other.
+
+**The cache-attribution bug this milestone's tests actually found.**
+Building rule IDs and fingerprints on top of `Finding.agent` surfaced a
+real, previously latent correctness bug rather than being blocked by an
+already-solid foundation: `.agent-cache/manifest.json` (schema version 1)
+stored every routed agent's raw response text for a file merged into one
+string, replayed on a cache hit under the placeholder agent name
+`"cached"` (see the SARIF section's own note above, written before this
+was fixed). Once rule IDs depend on the real agent name, this meant a
+cache-hit replay of the identical finding got a *different* rule ID (and
+therefore fingerprint) than the original live call — the single most
+common repeat-run scenario, and exactly the case a finding-lifecycle
+feature most needs to be stable across. Caught by a real failing test
+written for this milestone
+(`test_a_normal_review_never_modifies_the_baseline`), not by inspection.
+Fixed by changing the cache to store `dict[agent, raw_text]` instead of
+one merged string (`CACHE_SCHEMA_VERSION` 1 → 2 — an old, version-1
+manifest is simply treated as empty and repopulated on the next run, the
+same no-migration-needed mechanism this project's cache has always used
+for a schema bump), and having both the cache-hit and live-call branches
+of `orchestrator._review_one_file()` call `rules.attach_rule_ids()` per
+real agent name. Directly verified both by a dedicated regression test
+(`test_cache_hit_preserves_agent_and_rule_id_from_the_original_live_call`
+in `cli/tests/test_orchestrator.py`) and by a manual end-to-end script
+comparing a live-call fingerprint against the same content's cache-hit
+fingerprint on the next run.
+
+**A pre-existing, unrelated fixture-validation gap found while running
+this milestone's own validation, documented rather than silently
+patched over.** `python scripts/validate_fixtures.py` currently reports
+0/23 in this working tree — but this has nothing to do with any change
+described above. Root-caused by checking out a clean copy of HEAD (a
+disposable `git worktree`, not touching this working tree) and running
+the identical script there: **23/23 pass** at HEAD. The 0/23 in the
+working tree traces entirely to already-uncommitted, unrelated edits that
+predate this milestone — most importantly, an uncommitted change to the
+root `CLAUDE.md` (adding Evidence Bar point 6, "Discriminating power" —
+see that section's own entry above) that `prompts.load_agent_prompts()`
+folds into **every** agent's `system_prompt` as a shared prefix, which is
+why even the two agents whose own prompt files are untouched
+(reliability-availability-review, api-type-contract-review) also fail —
+confirmed directly by recomputing one of their fixture cases' request
+hash with the working tree's `CLAUDE.md` (no match against the committed
+cassette) versus with HEAD's `CLAUDE.md` (matches exactly). Five
+specialist prompt files, three fixture case files, and
+`tests/fixtures/README.md` are also already modified in the working
+tree, independent of and unrelated to this milestone's own changes.
+Re-recording `tests/fixtures/cassettes.json` against a real Foundry
+resource (`--live`) is out of scope for this milestone regardless — it
+isn't one of the five capabilities, and this sandbox has no Foundry
+credentials — so this is left exactly as found, for whoever finishes and
+commits that separate, already-in-progress prompt change to resolve by
+running `--live` and committing the refreshed cassette alongside it.
+
+The identical root cause has one more manifestation, for the same
+reason: `cli/tests/test_cli_integration_live.py`'s two replay tests
+(against `cli/tests/cassettes/integration.json`, keyed against the
+*bundled* `default_rules/` prompts rather than `.claude/agents/`) also
+fail in this working tree and also pass at a clean HEAD checkout —
+because `default_rules/CLAUDE.md` and five of the seven
+`default_rules/agents/*.md` mirrors carry the exact same uncommitted,
+pre-existing edits as their `.claude/agents/` counterparts (they're
+meant to be kept in sync — see `test_default_rules_sync.py` — and
+evidently drifted together, uncommitted, before this milestone began).
+Same conclusion: unrelated to this milestone, not fixed here.

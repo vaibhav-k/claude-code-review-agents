@@ -158,6 +158,13 @@ agent-review review --path /path/to/some/repo --max-files 50
 # Mutually exclusive with --json (see cli.build_review_parser).
 agent-review review --path /path/to/some/repo --sarif > results.sarif
 
+# Persist today's findings as a baseline (creates .agent-review/baseline.json).
+agent-review review --path /path/to/some/repo --update-baseline
+
+# On later runs: classify against that baseline, show only unseen findings,
+# and fail CI only when one of those NEW findings is high severity or above.
+agent-review review --path /path/to/some/repo --baseline .agent-review/baseline.json --new-only --fail-on high
+
 # Generate a commit message for what's currently staged (no co-author trailer).
 agent-review commit --path /path/to/some/repo
 
@@ -218,6 +225,60 @@ agent-review heal --path /path/to/some/repo --apply   # writes the patch, then r
   and, per design, never add any co-author or attribution trailer --
   these are the user's own commits in the user's own repository.
 
+## Finding lifecycle and CI policy
+
+Everything below is additive -- run `agent-review` with none of these
+flags and you get exactly the pre-0.11.0 behavior.
+
+- **Rule IDs** (`rules.py`) -- every finding gets a stable, deterministic
+  ID like `SEC-INJECTION-001` or a domain-level fallback like
+  `DATA-GENERAL-001`, derived from the diff text itself (never from the
+  model's own wording, so the same defect always gets the same ID).
+  Exposed in `--json` (`rule_id`) and as SARIF's `ruleId`. See
+  `DESIGN.md`'s "Finding lifecycle and CI policy" section for the
+  category table and its one documented limitation (one rule ID per
+  file+agent, not per individual finding).
+- **Fingerprints** (`fingerprint.py`) -- a sha256 of the rule ID, the
+  repo-relative path, and a normalized title, deliberately excluding
+  line number and the model's free-form `impact`/`fix` prose. This is
+  what lets the same real-world defect be recognized as "the same
+  finding" across two runs even after an unrelated edit moves its line
+  number. It is **not** a semantic identity -- see DESIGN.md for the
+  full, honest list of what it can and can't tell apart.
+- **Baseline** (`--baseline PATH`, `--update-baseline`) -- a
+  version-controlled JSON snapshot of previously-seen findings
+  (`.agent-review/baseline.json` by default). `--update-baseline`
+  explicitly writes/replaces it from this run's findings; a normal run
+  (even with `--baseline` for reading) never writes it. Every finding
+  is then classified `new` or `existing` against it.
+- **`--new-only`** -- with a baseline, shows/evaluates only `new`
+  findings. With no baseline, every finding is already `new`, so this
+  is a harmless no-op.
+- **`--fail-on SEVERITY[,SEVERITY...]`** -- exits non-zero if any
+  finding in the (baseline/`--new-only`-filtered) display set is at or
+  above the given severity. Independent of the older
+  `--fail-on-findings`, which still means "fail if anything was found
+  at all," unchanged.
+
+```bash
+# First run on a repo with an existing backlog: snapshot it once so CI
+# only ever gates on what's introduced from here on.
+agent-review review --path . --update-baseline
+
+# Every PR after that: only fail if a genuinely NEW finding is HIGH+.
+agent-review review --path . --baseline .agent-review/baseline.json --new-only --fail-on high
+
+# Refresh the baseline once the backlog above has actually been fixed
+# (or to intentionally accept today's findings as the new normal).
+agent-review review --path . --update-baseline
+```
+
+`--baseline`/`--update-baseline`/`--new-only`/`--fail-on` all work with
+`--json` and `--sarif` too: `--json` adds `rule_id`, `fingerprint`, and
+(when a baseline was used) `status` per finding, plus a top-level
+`baseline` object; `--sarif` adds a stable `ruleId`/`partialFingerprints`
+and SARIF's own `baselineState` per result.
+
 ## Development
 
 ```bash
@@ -237,3 +298,13 @@ python -m ruff check .  # run from the repo root -- see root ruff.toml
   file-presence heuristics (e.g. `pyproject.toml` implies `pytest`); if a
   detected command isn't actually installed, `agent-review heal` reports
   that clearly rather than guessing further.
+- Fingerprints are **not a semantic identity** -- they can't tell two
+  different findings apart if they land on the same rule ID, path, and
+  a title that normalizes the same way, and they treat any reworded
+  title (beyond case/whitespace/punctuation) as a brand-new finding even
+  if a person would call it identical. See DESIGN.md for the full list
+  of documented tradeoffs behind this design.
+- Rule IDs are derived once per file per agent (from that file's diff
+  text), not once per individual finding -- two structurally different
+  findings from the same specialist in the same file currently share a
+  rule ID.
