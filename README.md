@@ -1,5 +1,7 @@
 # claude-code-review-agents
 
+**Repository:** [github.com/vaibhav-k/claude-code-review-agents](https://github.com/vaibhav-k/claude-code-review-agents)
+
 A production-grade, inference-efficient Claude Code subagent system for
 automated diff review. It caps out at **8 total agents** — one triage
 router plus seven razor-scoped defect-class specialists (security, data
@@ -97,7 +99,7 @@ if you want a single domain reviewed without running triage.
 | `concurrency-resource-review` | Races, deadlocks, unsynchronized shared state, leaked handles/connections/memory. |
 | `reliability-availability-review` | Error handling that hides failure, missing timeouts/retries, cascading-failure risk, startup/shutdown/health-check correctness. |
 | `performance-review` | N+1 queries, algorithmic complexity regressions, blocking calls in non-blocking contexts, unbounded growth. |
-| `api-type-contract-review` | Breaking signature/schema changes, unsafe type widenings, contract drift across language boundaries. |
+| `api-type-contract-review` | Breaking signature/schema changes, unsafe type widenings, contract drift across language boundaries, plus structural/architectural boundary violations — circular dependencies, layering violations, encapsulation bypasses. |
 | `testing-coverage-review` | Untested non-trivial new logic, tests that can't fail, weakened assertions, flaky-prone or isolation-breaking test patterns. |
 
 Full razor-thin scope, triggers, and explicit exclusions for each agent are

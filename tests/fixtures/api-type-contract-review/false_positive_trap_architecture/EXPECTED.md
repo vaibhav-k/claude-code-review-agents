@@ -1,0 +1,1 @@
+Expected: no finding - invoice.py already imports and calls two other functions from billing.ledger in the same direction (get_account_status, get_balance), unchanged by this diff; the new get_last_entry call is one more instance of an already-established, one-directional dependency, not a new coupling or cycle this diff introduces.

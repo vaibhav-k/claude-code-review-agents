@@ -75,6 +75,13 @@ From the changed file list and hunks, extract:
   - API/type: public function/endpoint signature changes, exported
     type/interface changes, request/response DTO changes, versioned API
     files, type annotation removals, `any`/implicit-object casts added.
+  - Architecture/dependency: any new `import`/`require`/`using`/`#include`
+    statement added by the diff, especially one that crosses a directory
+    boundary suggestive of an architectural layer (e.g. `domain/`→
+    `infrastructure/`, `core/`→`ui/`, `models/`→`controllers/`) or reaches
+    into another module's private/internal-marked namespace. Triage only
+    needs to notice the new import exists — confirming an actual cycle or
+    layering violation is api-type-contract-review's job, not triage's.
   - Testing/maintainability: test files touched vs. not, production logic
     changed with zero corresponding test diff, large added functions with no
     corresponding test, config/feature-flag sprawl.
@@ -99,7 +106,7 @@ normal, not a failure to narrow down.
 | `concurrency-resource-review` | Any async/await, thread, lock, mutex, semaphore, or promise-combinator keyword; any resource-acquiring call (file, socket, DB connection, process handle); any change touching `finally`/`using`/`with`/RAII/`Dispose`/`close`. |
 | `reliability-availability-review` | Any exception/error-handling block change (especially broadened or removed catches); any retry/backoff/timeout/circuit-breaker code; any startup, shutdown, health-check, or queue-consumer logic; any change to how failures propagate to callers or callers of external services. |
 | `performance-review` | Any loop or collection operation newly wrapping an I/O or DB call; any change to a request-handling hot path; any batch-size, pagination, or cache-configuration change; any algorithmic-structure change (nested loop added, index removed) in code with obvious scale. |
-| `api-type-contract-review` | Any change to a public/exported function, method, endpoint, or interface signature; any request/response DTO/schema change; any type-annotation change, removal, or widening (e.g. to `any`/`object`/`var` losing precision); any versioned-API file. |
+| `api-type-contract-review` | Any change to a public/exported function, method, endpoint, or interface signature; any request/response DTO/schema change; any type-annotation change, removal, or widening (e.g. to `any`/`object`/`var` losing precision); any versioned-API file; any new import/`require`/`using` statement added, especially one crossing a directory boundary suggestive of an architectural layer or reaching into another module's private/internal namespace. |
 | `testing-coverage-review` | Any change to a test file; any non-trivial production logic change (new branch, new function, changed condition) with no corresponding test diff in the same commit/PR. |
 
 If a diff is pure formatting/comments/renames with no semantic change to any

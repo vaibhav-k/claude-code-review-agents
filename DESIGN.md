@@ -58,7 +58,7 @@ anything beyond this core set; see the note at the end of Section F.
 | **concurrency-resource-review** | Concurrency/async defects + resource-lifecycle failures. | Races, deadlocks, unsynchronized shared state, async/promise correctness, leaked handles/connections/memory, double-free/use-after-free. | async/await, thread, lock/mutex/semaphore keyword; resource-acquiring call; `finally`/`using`/`with`/RAII/`Dispose`/`close` touched. | Pre-existing races/leaks untouched by diff; TOCTOU race that is actually an authz bypass (→ security); lock/resource performance cost (→ performance); missing concurrency tests. |
 | **reliability-availability-review** | Reliability/availability under failure. | Error-handling that hides failure, missing/wrong timeouts, retry/backoff defects, cascading-failure risk, startup/shutdown/health-check/queue-ack correctness. | Broadened/added catch-all; new network/DB call w/ no timeout; retry/backoff code; startup/shutdown/health-check/consumer-ack logic. | Pre-existing handling untouched by diff; leaks inside a catch block (→ concurrency-resource); auth-service-fails-open (→ security); "add more logging" advice; missing tests. |
 | **performance-review** | Material performance regressions only. | N+1 patterns, algorithmic complexity regressions, blocking calls in non-blocking contexts, unbounded growth by design, batch/pagination regressions, query-plan regressions. | Loop wrapping I/O/DB call; request-handler hot-path change; batch/page-size/cache-config change; algorithmic-structure change with evident scale. | Pre-existing perf characteristics untouched by diff; micro-optimizations w/o measured impact; slow code on demonstrably small bounded input; query correctness (→ data-integrity); growth from a cleanup bug (→ concurrency-resource); missing benchmarks. |
-| **api-type-contract-review** | API/contract violations + type-safety failures. | Breaking signature/endpoint changes, schema/DTO drift, unsafe type widenings/casts, null/undefined contract breaks, enum/union exhaustiveness, cross-language boundary drift. | Public function/endpoint/interface signature change; request/response DTO/schema change; type-annotation widening/removal; versioned-API file. | Pre-existing mismatches untouched by diff; breaking changes fully propagated to every visible consumer; internal logic correctness (→ data-integrity); same-language breaks the compiler already catches; missing tests. |
+| **api-type-contract-review** | API/contract violations + type-safety failures + structural/dependency boundary violations. | Breaking signature/endpoint changes, schema/DTO drift, unsafe type widenings/casts, null/undefined contract breaks, enum/union exhaustiveness, cross-language boundary drift, newly introduced circular dependencies, layering-direction violations, encapsulation/facade bypasses. | Public function/endpoint/interface signature change; request/response DTO/schema change; type-annotation widening/removal; versioned-API file; new import/dependency edge crossing an established layer or closing a cycle. | Pre-existing mismatches/cycles/layer crossings untouched by diff; breaking changes fully propagated to every visible consumer; a new edge that matches an already-established local precedent; internal logic correctness (→ data-integrity); same-language breaks the compiler already catches; cascading-failure/runtime consequence of a structural issue (→ reliability-availability); deadlock/init-ordering consequence of a cycle (→ concurrency-resource); SRP/"too many responsibilities" opinions; missing tests. |
 | **testing-coverage-review** | Testing as a discipline — coverage gaps and test-quality defects. | Untested non-trivial new branches/boundaries, tests that cannot fail, removed/weakened assertions, flaky-prone patterns, test-isolation defects. | Production logic changed w/ no test diff in same commit; test file touched; new boundary condition without a boundary-case test; new test with a sleep/unseeded-random/shared-state pattern. | Missing tests for untouched code; subjective test style; duplicated logic or dead code (→ data-integrity); re-flagging a bug a peer agent already owns just because it also lacks a test; computing coverage percentages or running a test runner. |
 
 ---
@@ -89,6 +89,7 @@ route set — routes are additive, not exclusive.
 | File type | `*.test.*`, `*_test.*`, `test_*.py`, `**/tests/**` | testing-coverage-review |
 | File type | CI/CD config (`.github/workflows/*`, `Jenkinsfile`) | reliability-availability-review |
 | Change type | New public/exported function or endpoint signature | api-type-contract-review |
+| Change type | New import/`require`/`using` statement added, especially one crossing a directory boundary that looks like an architectural layer (e.g. `domain/`→`infrastructure/`, `core/`→`ui/`, `models/`→`controllers/`) or reaching into another module's private/internal-marked namespace | api-type-contract-review (triage routes cheaply on the new-import signal alone; confirming an actual cycle or layering violation is the specialist's job, not triage's) |
 | Change type | New/removed try/catch, retry, timeout, circuit breaker | reliability-availability-review |
 | Change type | New lock/thread/async/await/resource-open call | concurrency-resource-review |
 | Change type | Pure rename/formatting/comment-only diff | none (triage marks "no semantic change") |
@@ -418,6 +419,80 @@ what the compiler already guarantees before merge. Reserve findings here for
 breaks that survive compilation (dynamic-language calls, reflection, a
 cross-service JSON boundary).
 
+**True Positive (architecture)** — Python, new import closes a circular dependency:
+```python
+# billing/ledger.py (unchanged elsewhere in this diff; already present before it)
+from billing.invoice import format_invoice_line
+
+
+def render_ledger_entry(entry):
+    return format_invoice_line(entry)
+```
+```python
+# billing/invoice.py (changed in this diff)
+from billing.ledger import render_ledger_entry  # new import added by this diff
+
+
+def format_invoice_line(entry):
+    if entry.needs_ledger_context:
+        return render_ledger_entry(entry)
+    return str(entry)
+```
+Expected: `[HIGH] billing/invoice.py:1 — New import from billing.ledger closes a circular dependency with billing.ledger.py`
+Impact: `billing/ledger.py` already imports `format_invoice_line` from
+`billing/invoice.py`; this diff's new reverse import makes the two modules
+mutually dependent, which can break on import order (whichever module
+imports first sees a partially-initialized version of the other) and makes
+either module impossible to test, deploy, or reason about in isolation from
+the other.
+Fix: extract the shared piece both modules need (e.g. the ledger-context
+formatting logic) into a third module neither depends on, or invert one of
+the two dependencies so the relationship is one-directional.
+
+**False Positive Trap** — new call in the same direction as several existing ones (must NOT fire):
+```python
+# billing/invoice.py (changed in this diff — one new call added)
+from billing.ledger import get_balance, get_last_entry, get_account_status
+
+
+def summarize_invoice(entry):
+    status = get_account_status(entry.account_id)  # pre-existing, unchanged
+    balance = get_balance(entry.account_id)  # pre-existing, unchanged
+    last = get_last_entry(entry.account_id)  # NEW in this diff
+    return f"{status}: {balance} (last: {last})"
+```
+Expected: no finding — `billing/invoice.py` already imports and calls two
+other functions from `billing/ledger.py` in the same direction, unchanged by
+this diff; the new `get_last_entry` call is one more instance of an
+already-established, one-directional dependency, not a new coupling or a
+cycle this diff introduces.
+
+**Boundary Case** — new call bypasses a repository interface, but every other call site in the diff's own touched files does the same thing already:
+```python
+# reports/monthly.py (changed in this diff)
+from db.orders_repository import (
+    OrdersRepository,
+)  # existing, used elsewhere in this file
+from db.connection import get_raw_connection  # also already used elsewhere in this file
+
+
+def generate_summary(month):
+    repo = OrdersRepository()
+    orders = repo.for_month(month)  # goes through the repository, pre-existing
+    conn = get_raw_connection()
+    raw_totals = conn.execute(
+        "SELECT ..."
+    ).fetchall()  # bypasses the repository — but this exact pattern already appears twice earlier in this same file, untouched by this diff
+    return orders, raw_totals
+```
+Expected: no finding — the diff's own touched file already shows the
+repository being bypassed via `get_raw_connection()` in two other,
+untouched places; this is a pre-existing local convention (however
+debatable), not a new violation this diff introduces. (If this file
+consistently went through `OrdersRepository` everywhere else and this were
+the first `get_raw_connection()` call in it, this would flip to a True
+Positive.)
+
 ### testing-coverage-review
 
 **True Positive** — Python, new non-trivial branch with zero test diff:
@@ -518,6 +593,25 @@ line of code cannot generate two findings from two agents:
   performance-review, never both on the same line.
 - A breaking API change vs. what the function computes → api-type-contract-
   review vs. data-integrity-review.
+- A newly introduced circular dependency or layering violation vs. the
+  production-down/cascading-failure consequence of that same coupling →
+  api-type-contract-review reports the structural edge itself (the wrong
+  import, the closed cycle); reliability-availability-review reports the
+  runtime failure-mode consequence (a newly-critical synchronous dependency
+  on a failure-prone service), only when that consequence is independently
+  demonstrable — neither restates the other's finding for the same root
+  cause.
+- A newly introduced circular dependency vs. a deadlock/partial-
+  initialization failure it causes at module load time → api-type-contract-
+  review owns the cycle; concurrency-resource-review owns the ordering/
+  lifecycle failure, only when one is independently demonstrable.
+- A new call bypassing an existing facade/repository/service boundary vs.
+  the same call simply matching an already-established local precedent in
+  the same touched module → the former is a reportable architecture
+  finding, the latter is explicitly excluded (api-type-contract-review only
+  reports the FIRST exception to an otherwise-consistent local convention,
+  or the first instance of a new pattern — not every subsequent, consistent
+  use of it).
 - Duplicated or dead business logic vs. a plain missing test → data-integrity-
   review owns the former (it's a correctness-risk finding) and
   testing-coverage-review owns the latter; neither reports the other's line.
