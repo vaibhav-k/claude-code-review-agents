@@ -3,6 +3,77 @@
 All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.0] — 2026-09-22
+
+Adds structural/architectural boundary-violation detection to the review
+system, without breaking the 8-agent ceiling: expands the existing
+`api-type-contract-review` specialist rather than adding a 9th agent.
+
+### Added
+
+- **Architecture/dependency-boundary scope for `api-type-contract-review`**
+  -- newly introduced circular dependencies, layering-direction violations,
+  and encapsulation/facade bypasses, alongside its existing signature/
+  schema/type-safety scope. Updated in both
+  `.claude/agents/api-type-contract-review.md` and its bundled `cli/`
+  snapshot (`cli/src/agent_review/default_rules/agents/`, kept in sync per
+  `test_default_rules_sync.py`). Explicit deferral rules added against
+  three adjacent agents so the same line never produces two findings:
+  reliability-availability-review (the structural edge vs. the runtime
+  cascading-failure consequence of it), concurrency-resource-review (the
+  cycle vs. a deadlock/initialization-ordering failure it causes), and
+  security-review (an encapsulation bypass vs. an access-control bypass
+  that happens to also cross a module boundary). `DESIGN.md` Sections A,
+  C, E, and F updated to match; `triage-router.md` given a matching new
+  routing signal (a new import/`require`/`using` statement added,
+  especially one crossing a directory boundary suggestive of a layer).
+  Three new validation fixtures added under
+  `tests/fixtures/api-type-contract-review/`
+  (`true_positive_architecture`, `false_positive_trap_architecture`,
+  `boundary_case_architecture`), wired into `manifest.json` -- all 6 of
+  this agent's cases (the 3 pre-existing plus the 3 new) pass in replay
+  mode against placeholder responses seeded from `EXPECTED.md`; a `--live`
+  run against a real Foundry resource is still needed before this scope is
+  considered validated against real model judgment, not just harness
+  wiring (see `tests/fixtures/README.md`).
+- **`routing.py` ported the same new-import signal** that `triage-router.md`
+  gained above, so the standalone CLI routes architecture-relevant diffs to
+  `api-type-contract-review` the same way the Claude-Code-native agents do,
+  rather than silently under-routing relative to them. Covered by three new
+  tests in `cli/tests/test_routing.py`, including a regression test
+  confirming the pattern's `^\+` anchor matches only an added import line,
+  not a pre-existing one merely visible as unchanged hunk context (the
+  false-positive shape this signal would otherwise be prone to).
+
+### Fixed
+
+- `pyrightconfig.json` now lists `tests/fixtures` under `"ignore"` as well
+  as the pre-existing `"exclude"` -- `exclude` alone stops Pyright from
+  walking these intentionally-non-importable synthetic fixture files during
+  a whole-project scan, but does not suppress diagnostics once one is
+  individually opened in the editor, which is what actually matters for
+  the "import could not be resolved" noise these files are expected to
+  produce by design. Also restored Pyright's default excludes
+  (`**/node_modules`, `**/__pycache__`, `**/.*`), which silently stop
+  applying the moment a config defines its own custom `"exclude"` list --
+  this repo's had a custom one (for `tests/fixtures`) since before this
+  release, without the defaults alongside it.
+
+### Known issue (not fixed in this release)
+
+- `cli/tests/test_cli_integration_live.py`'s two tests fail in replay mode
+  against the committed `cli/tests/cassettes/integration.json` -- a
+  cassette miss on the `handlers.py` request hash. Confirmed unrelated to
+  anything changed in this release: `CLAUDE.md`, `security-review.md`, and
+  `performance-review.md` (the only prompts this specific case's request
+  hash depends on) are all unchanged and root/bundled-synced per
+  `test_default_rules_sync.py`, which passes cleanly. Most likely stale
+  from an earlier `orchestrator.py` refactor changing the literal request
+  text without a matching cassette re-record at the time. Needs
+  `AGENT_REVIEW_RECORD_LIVE=1 pytest cli/tests/test_cli_integration_live.py`
+  against a real Foundry resource to fix; not available in the environment
+  this release was prepared in.
+
 ## [0.11.0] — 2026-09-21
 
 Milestone 1 of the finding-lifecycle work: turns a one-shot review into
