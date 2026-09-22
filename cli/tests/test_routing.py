@@ -89,6 +89,44 @@ def test_test_file_routes_testing_coverage():
     assert "testing-coverage-review" in decision.agents
 
 
+def test_new_import_diff_routes_api_type_contract():
+    # Mirrors triage-router.md's "Architecture/dependency" signal: a new
+    # import statement added by this diff routes to api-type-contract-review
+    # so it can judge whether the new edge closes a cycle or crosses a
+    # layer -- routing itself doesn't need to know which.
+    diff = """
++from billing.ledger import render_ledger_entry
+ def format_invoice_line(entry):
+     return entry
+"""
+    decision = routing.route_file("billing/invoice.py", diff)
+    assert "api-type-contract-review" in decision.agents
+
+
+def test_new_using_statement_diff_routes_api_type_contract():
+    diff = """
++using MyApp.Infrastructure;
+ public class OrderService {
+ }
+"""
+    decision = routing.route_file("OrderService.cs", diff)
+    assert "api-type-contract-review" in decision.agents
+
+
+def test_unchanged_context_import_alone_does_not_route_api_type_contract():
+    # The `^\+` anchor must match an ADDED import line, not one merely
+    # visible as unchanged context around an unrelated change -- otherwise
+    # nearly every diff near the top of a file would over-route.
+    diff = """
+ import os
+ import sys
+-x = 1
++x = 2
+"""
+    decision = routing.route_file("script.py", diff)
+    assert "api-type-contract-review" not in decision.agents
+
+
 def test_unrelated_diff_does_not_route_everything():
     diff = """
 +GREETING = "hello"

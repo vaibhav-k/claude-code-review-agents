@@ -136,7 +136,7 @@ _AGENT_PATTERNS: dict[str, list[re.Pattern]] = {
         ]
     ],
     "api-type-contract-review": [
-        re.compile(p, re.IGNORECASE)
+        re.compile(p, re.IGNORECASE | re.MULTILINE)
         for p in [
             r"\bpublic\s+\w+\s+\w+\(",
             r"\bexport\s+(function|class|interface)\b",
@@ -147,6 +147,23 @@ _AGENT_PATTERNS: dict[str, list[re.Pattern]] = {
             r":\s*any\b",
             r"\bnullable\b",
             r"\benum\b",
+            # New import/require/using/#include statement ADDED by this diff --
+            # mirrors triage-router.md's "Architecture/dependency" signal
+            # (Step 2) and its Step 3 trigger clause added alongside the
+            # api-type-contract-review agent's architecture-violation scope.
+            # `^\+` anchors to an added line specifically (not a pre-existing
+            # import merely visible in the hunk's unchanged context), matching
+            # the same intent as testing-coverage-review's own `^\+\s*(def ...`
+            # check below. Deliberately as broad as triage's own signal --
+            # "notice the new import exists" -- confirming an actual cycle or
+            # layering violation from it is the specialist's job, not the
+            # router's; see api-type-contract-review.md's Strict scope.
+            r"^\+\s*import\s+\S",
+            r"^\+\s*from\s+\S+\s+import\s",
+            r"^\+\s*(const|let|var)\s+\S+\s*=\s*require\s*\(",
+            r"^\+\s*import\s+[\{\*\w].*\bfrom\b",
+            r"^\+\s*using\s+[A-Za-z_][\w.]*\s*;",
+            r"^\+\s*#include\s*[<\"]",
         ]
     ],
     "testing-coverage-review": [
