@@ -1,7 +1,7 @@
 {
   "00659a0280588838d09e6d13d102701b02ded3d75936a41acfa95bedd4c2b704": {
     "label": "handlers.py",
-    "response": "[CRITICAL] handlers.py:2 \u2014 SQL injection via unsanitized request parameter\nImpact: Untrusted user_id from get_request_id() is interpolated directly into a SQL query string, allowing arbitrary SQL execution.\nFix: Use parameterized query: `result = db.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,)).fetchone()` or equivalent prepared statement with bound parameters for your database driver."
+    "response": "[CRITICAL] handlers.py:2 \u2014 SQL injection via unparameterized user_id\nImpact: Untrusted user_id from get_request_id() is interpolated directly into a SQL query string, allowing an attacker to inject arbitrary SQL commands and read, modify, or delete data.\nFix: Replace the f-string with a parameterized query: `result = db.execute(\"SELECT * FROM users WHERE id = ?\", (user_id,)).fetchone()` (or use the appropriate parameterization syntax for your database driver)."
   },
   "300d3f5fd0218b8d87d480842904950c4c64fc8482f1188cb01cfb88d98aafb9": {
     "label": "safe_handlers.py",
@@ -49,7 +49,7 @@
   },
   "f27bdfa94cf31b9fb8c5958d4d8ade98deb5276d33d4f205f390984ab082b281": {
     "label": "handlers.py",
-    "response": "[CRITICAL] handlers.py:2 \u2014 SQL injection via unsanitized request parameter\nImpact: User-controlled `user_id` is interpolated directly into SQL query, allowing arbitrary SQL execution and data breach.\nFix: Use a parameterized query: `query = \"SELECT * FROM users WHERE id = ?\"` with `db.execute(query, (user_id,)).fetchone()` or equivalent prepared-statement syntax for your DB driver."
+    "response": "[CRITICAL] handlers.py:2 \u2014 SQL injection vulnerability via unsanitized user input\nImpact: Attacker can inject arbitrary SQL by controlling `get_request_id()` return value, enabling unauthorized data access, modification, or deletion.\nFix: Use parameterized query: `query = \"SELECT * FROM users WHERE id = ?\"` with `db.execute(query, (user_id,)).fetchone()` to separate SQL structure from data."
   },
   "fecf0bbd7ae660f2033574d14dc43bbd955ef0bda6b63df0e102dba0728b096f": {
     "label": "handlers.py",
