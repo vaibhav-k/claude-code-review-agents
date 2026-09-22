@@ -12,7 +12,34 @@
 // ...` -- support/ is test-only code, never installed -- and needs the
 // same static-vs-runtime bridge mypy.ini's own `mypy_path = cli/tests`
 // already provides for mypy.
+//
+// Pyright applies a built-in default exclude list (**/node_modules,
+// **/__pycache__, **/.*) only when "exclude" is left unset -- defining a
+// custom "exclude" here, as this file already did for tests/fixtures/,
+// replaces those defaults rather than adding to them, so they're listed
+// out explicitly below too (Pylance's own "missing default excludes"
+// suggestion). Without this, __pycache__/.mypy_cache/.pytest_cache/
+// .ruff_cache/.venv-style dot-directories that accumulate locally would
+// be back in Pyright's whole-workspace scan.
+//
+// tests/fixtures/ is listed under BOTH "exclude" and "ignore", not just
+// "exclude" alone. Every case in there is a synthetic diff snippet --
+// `scripts/validate_fixtures.py`'s build_case_diff() only ever diffs these
+// files as text (git diff --no-index), never imports or executes them --
+// so on purpose they reference modules/names that don't exist anywhere in
+// the repo (e.g. performance-review/true_positive/orders.py's bare `db`/
+// `Order`, or api-type-contract-review's *_architecture cases importing
+// `billing.ledger`/`db.orders_repository`, which exist only as sibling
+// fixture text, not as an importable package). "exclude" alone stops
+// Pyright/Pylance from walking these files during a whole-workspace scan,
+// but does NOT suppress diagnostics for one of them once it's individually
+// open in the editor -- confirmed 2026-09-22 when a newly added fixture
+// still surfaced "import could not be resolved" in VS Code despite the
+// pre-existing "exclude" entry. "ignore" is the stronger directive that
+// also silences diagnostics on an explicitly opened file, which is what
+// this directory actually needs.
 {
   "extraPaths": ["cli/src", "cli/tests"],
-  "exclude": ["tests/fixtures"]
+  "exclude": ["**/node_modules", "**/__pycache__", "**/.*", "tests/fixtures", ".venv"],
+  "ignore": ["tests/fixtures"]
 }
